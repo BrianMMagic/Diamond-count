@@ -305,14 +305,24 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
     m.finalNumber = group.number;
     m.classificationMethod = 'group';
     m.needsReview = false;
-    // A big, sharp group read confidently is strong evidence; a small or fuzzy
-    // one is not, and says so rather than pretending.
-    const strength = Math.min(1, group.count / 20) * group.sharpness * Math.max(0.4, group.confidence);
-    m.finalScore = Math.max(0.5, Math.min(1, 0.5 + 0.5 * strength));
-    m.finalConfidence = strength >= 0.45 ? 'high' : 'medium';
+    // Weighted sum, not a product. Multiplying the three together let a single
+    // modest classifier score drag a group of four hundred markers with a razor
+    // sharp average down to "medium", which reported nothing as high confidence
+    // at all. How many markers agree, and how cleanly they agree, are evidence
+    // in their own right -- the reading of the averaged picture is only part of
+    // the case.
+    const strength =
+      0.45 * Math.min(1, group.count / 25) + 0.35 * group.sharpness + 0.2 * group.confidence;
+    m.finalScore = Math.max(0.5, Math.min(1, strength));
+    m.finalConfidence = strength >= 0.62 ? 'high' : 'medium';
+    // Say how good the case actually is, in plain terms. A raw percentage from
+    // the classifier reads as the whole story when it is only one strand of it.
     m.reason =
-      `Its digit matches ${group.count} markers whose averaged shape reads as ${group.number} ` +
-      `(${Math.round(group.confidence * 100)}% on the averaged picture).`;
+      strength >= 0.62
+        ? `Its digit matches ${group.count} markers that all print the same shape, and their combined picture reads clearly as ${group.number}.`
+        : group.count < 10
+          ? `Its digit matches only ${group.count} other marker${group.count === 1 ? '' : 's'}, so the combined picture is not very clear. It reads as ${group.number} — worth checking.`
+          : `Its digit matches ${group.count} markers, but their combined picture is not sharp. It reads as ${group.number} — worth checking.`;
   });
 
   // ---- Stage 7: resolve the markers no shape group claimed -----------------

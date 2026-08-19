@@ -38,7 +38,7 @@ export function MarkerEditor({ marker, original, onPick, onReject, onUnknown, on
       </div>
       <div className="sheet-body">
         <div className="marker-detail">
-          <MarkerThumb original={original} marker={marker} size={110} context={1.25} className="thumb thumb-lg" />
+          <MarkerThumb original={original} marker={marker} size={110} context={1.1} highlight className="thumb thumb-lg" />
           <dl className="kv">
             <dt>Detected</dt>
             <dd className="kv-strong">{marker.rejected ? 'Not a marker' : (value ?? 'Unknown')}</dd>

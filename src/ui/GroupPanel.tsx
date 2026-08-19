@@ -39,16 +39,17 @@ export function GroupPanel({ result, onRelabel }: Props) {
           return (
             <div
               key={group.index}
-              className={`group-row${group.number == null ? ' is-ambiguous' : ''}`}
+              className={`group-row${group.number == null || group.count < 10 || group.sharpness < 0.6 ? ' is-ambiguous' : ''}`}
             >
               <div className="group-main">
                 <PrototypeGlyph group={group} />
                 <div className="group-text">
                   <strong>{group.number == null ? 'Not identified' : `Number ${group.number}`}</strong>
                   <small>
-                    {group.count} markers · averaged picture read at{' '}
-                    {Math.round(group.confidence * 100)}% · sharpness{' '}
-                    {Math.round(group.sharpness * 100)}%
+                    {group.count} marker{group.count === 1 ? '' : 's'} ·{' '}
+                    {group.sharpness >= 0.6
+                      ? 'combined picture is clear'
+                      : 'combined picture is fuzzy — worth checking'}
                   </small>
                 </div>
                 <button

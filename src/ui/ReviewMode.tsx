@@ -70,10 +70,17 @@ export function ReviewMode(props: Props) {
         {marker && (
           <>
             <div className="review-stage">
-              <MarkerThumb original={props.original} marker={marker} size={168} context={1.4} className="thumb thumb-xl" />
+              <MarkerThumb
+                original={props.original}
+                marker={marker}
+                size={168}
+                context={1.15}
+                highlight
+                className="thumb thumb-xl"
+              />
               <div className="review-meta">
                 <div className="review-guess">
-                  Best guess <strong>{marker.finalNumber ?? '?'}</strong>
+                  The ringed marker · best guess <strong>{marker.finalNumber ?? '?'}</strong>
                 </div>
                 <div className="review-note">{marker.reason}</div>
               </div>
@@ -94,7 +101,14 @@ export function ReviewMode(props: Props) {
         {candidate && (
           <>
             <div className="review-stage">
-              <MarkerThumb original={props.original} marker={candidate} size={168} context={1.4} className="thumb thumb-xl" />
+              <MarkerThumb
+                original={props.original}
+                marker={candidate}
+                size={168}
+                context={1.15}
+                highlight
+                className="thumb thumb-xl"
+              />
               <div className="review-meta">
                 <div className="review-guess">Possible missed marker</div>
                 <div className="review-note">

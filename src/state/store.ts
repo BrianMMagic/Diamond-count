@@ -298,7 +298,10 @@ export function useAppController() {
   const reviewQueue = useMemo(() => {
     if (!result) return [] as MarkerDetection[];
     return result.markers
-      .filter((m) => !m.rejected && m.manualNumber == null && (m.needsReview || m.finalConfidence !== 'high'))
+      // Only markers that genuinely need a decision. Including every
+      // medium-confidence marker put six hundred items in the queue, almost all
+      // of which were settled -- which buries the handful that actually matter.
+      .filter((m) => !m.rejected && m.manualNumber == null && (m.needsReview || m.finalNumber == null))
       .sort((a, b) => reviewPriority(a) - reviewPriority(b));
   }, [result]);
 
