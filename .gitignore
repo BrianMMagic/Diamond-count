@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.scratch/
+*.local
+.DS_Store
+
+# Sample photographs and their rendered overlays are large and private; the
+# ground-truth JSON that describes them is tracked.
+samples/*.jpg
+samples/*.jpeg
+samples/*.png
+samples/output/
+*.tsbuildinfo
