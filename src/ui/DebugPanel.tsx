@@ -69,6 +69,11 @@ export function DebugPanel({ result, original, onFocus, onClose }: Props) {
           <Stat label="OCR engine" value={stats.ocrEngine} />
           <Stat label="OCR/colour conflicts" value={stats.ocrColorDisagreements} />
           <Stat label="Rescued by colour" value={stats.colorRescued} />
+          <Stat label="Numbers in image" value={stats.activeNumbers.join(', ') || '—'} />
+          <Stat label="Number set from" value={stats.activeNumbersSource} />
+          <Stat label="Impossible readings" value={stats.outOfVocabularyReadings} />
+          <Stat label="Corrected by colour group" value={stats.clusterCorrected} />
+          <Stat label="Isolated detections cut" value={stats.isolatedRejected} />
           <Stat label="Total time" value={`${(stats.durationMs / 1000).toFixed(1)} s`} />
         </div>
 

@@ -9,6 +9,7 @@ import { ReviewMode } from './ui/ReviewMode.tsx';
 import { DebugPanel } from './ui/DebugPanel.tsx';
 import { AdvancedSettings } from './ui/AdvancedSettings.tsx';
 import { NumberPad } from './ui/NumberPad.tsx';
+import { NumberSetPicker } from './ui/NumberSetPicker.tsx';
 
 type Sheet = 'none' | 'marker' | 'review' | 'debug' | 'add';
 
@@ -137,6 +138,10 @@ export default function App() {
                   ? 'Very large photo — it was scaled down slightly so your browser can handle it.'
                   : 'Ready to analyse. Everything runs on your device.'}
               </p>
+              <NumberSetPicker
+                value={app.settings.allowedNumbers}
+                onChange={(v) => app.setSettings({ ...app.settings, allowedNumbers: v })}
+              />
               <button type="button" className="btn btn-primary btn-block" onClick={() => app.analyze()}>
                 Analyze image
               </button>
@@ -161,6 +166,21 @@ export default function App() {
                 onReview={() => setSheet('review')}
                 onApplyCorrections={app.applyCorrections}
               />
+              <NumberSetPicker
+                value={app.settings.allowedNumbers}
+                onChange={(v) => app.setSettings({ ...app.settings, allowedNumbers: v })}
+                inferred={app.result.stats.activeNumbers}
+              />
+              {app.settings.allowedNumbers !== null &&
+                app.settings.allowedNumbers.join() !== app.result.stats.activeNumbers.join() && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-block"
+                    onClick={() => app.analyze()}
+                  >
+                    Reanalyze with these numbers
+                  </button>
+                )}
               <AdvancedSettings
                 settings={app.settings}
                 estimatedMarkerSize={app.result.stats.estimatedRadius}

@@ -3,6 +3,7 @@ import type { Glyph, MarkerCrop } from '../markerCropper.ts';
 import type { OcrAttempt } from '../types.ts';
 import { getDigitTemplates } from './digitFont.ts';
 import type { DigitTemplate } from './digitFont.ts';
+import { normalizeAllowed } from './types.ts';
 import type { ClassificationOutput, NumberClassifier } from './types.ts';
 
 /**
@@ -103,28 +104,52 @@ export function scoreGlyph(glyph: Glyph): GlyphScore[] {
   return scores;
 }
 
-function combineGlyphs(glyphs: Glyph[]): { value: number | null; confidence: number; raw: string } {
-  if (glyphs.length === 0) return { value: null, confidence: 0, raw: '' };
+interface GlyphReading {
+  value: number | null;
+  confidence: number;
+  raw: string;
+  /** Every marker value that is possible here, best first. */
+  ranked: Array<{ value: number; score: number }>;
+}
+
+function combineGlyphs(glyphs: Glyph[], allowed: Set<number> | null): GlyphReading {
+  if (glyphs.length === 0) return { value: null, confidence: 0, raw: '', ranked: [] };
   const perGlyph = glyphs.map(scoreGlyph);
 
   if (glyphs.length === 1) {
-    const [best, second] = perGlyph[0];
-    const raw = String(best.digit);
-    // 0 alone is not a valid marker value; treat it as an unreadable glyph.
-    if (best.digit === 0) return { value: null, confidence: 0, raw };
-    return { value: best.digit, confidence: margin(best.similarity, second.similarity), raw };
+    const raw = String(perGlyph[0][0].digit);
+    // 0 alone is not a valid marker value, so it never enters the ranking.
+    const ranked = perGlyph[0]
+      .filter((s) => s.digit !== 0)
+      .filter((s) => !allowed || allowed.has(s.digit))
+      .map((s) => ({ value: s.digit, score: s.similarity }));
+    if (ranked.length === 0) return { value: null, confidence: 0, raw, ranked };
+    return {
+      value: ranked[0].value,
+      confidence: margin(ranked[0].score, ranked[1]?.score ?? 0),
+      raw,
+      ranked,
+    };
   }
 
   // Two glyphs: the only legal value is "10".
   const left = perGlyph[0];
   const right = perGlyph[1];
+  const raw = `${left[0].digit}${right[0].digit}`;
+  if (allowed && !allowed.has(10)) {
+    // The image has no tens, so this is one digit plus noise: keep the stronger.
+    const ranked = left
+      .filter((s) => s.digit !== 0 && allowed.has(s.digit))
+      .map((s) => ({ value: s.digit, score: s.similarity * 0.7 }));
+    if (ranked.length === 0) return { value: null, confidence: 0, raw, ranked };
+    return { value: ranked[0].value, confidence: margin(ranked[0].score, ranked[1]?.score ?? 0) * 0.6, raw, ranked };
+  }
   const oneScore = left.find((s) => s.digit === 1)?.similarity ?? 0;
   const zeroScore = right.find((s) => s.digit === 0)?.similarity ?? 0;
-  const raw = `${left[0].digit}${right[0].digit}`;
   const combined = Math.sqrt(oneScore * zeroScore);
   const rival = Math.sqrt(left[0].similarity * right[0].similarity);
   const conf = margin(combined, combined === rival ? 0 : rival * 0.9);
-  return { value: 10, confidence: conf, raw };
+  return { value: 10, confidence: conf, raw, ranked: [{ value: 10, score: combined }] };
 }
 
 /**
@@ -148,6 +173,11 @@ function margin(best: number, second: number): number {
  */
 export class TemplateClassifier implements NumberClassifier {
   readonly name = 'template';
+  private allowed: Set<number> | null = null;
+
+  setAllowedNumbers(allowed: number[] | null): void {
+    this.allowed = normalizeAllowed(allowed);
+  }
 
   async init(): Promise<void> {
     getDigitTemplates(GLYPH_SIZE);
@@ -172,9 +202,10 @@ export class TemplateClassifier implements NumberClassifier {
     ];
     const attempts: OcrAttempt[] = [];
     let best: { value: number | null; confidence: number } = { value: null, confidence: 0 };
+    let ranked: Array<{ value: number; score: number }> = [];
     let glyphCount = crop.glyphs.length;
     for (const v of variants) {
-      const r = combineGlyphs(v.glyphs);
+      const r = combineGlyphs(v.glyphs, this.allowed);
       attempts.push({
         variant: v.name,
         engine: this.name,
@@ -184,13 +215,14 @@ export class TemplateClassifier implements NumberClassifier {
       });
       if (r.value !== null && r.confidence > best.confidence) {
         best = { value: r.value, confidence: r.confidence };
+        ranked = r.ranked;
         glyphCount = v.glyphs.length;
       }
     }
     // Two variants agreeing is worth more than either alone.
     const agreeing = attempts.filter((a) => a.value === best.value && a.value !== null).length;
     const confidence = Math.min(1, best.confidence * (agreeing >= 2 ? 1.15 : 1));
-    return { value: best.value, confidence, attempts, glyphCount };
+    return { value: best.value, confidence, attempts, glyphCount, ranked };
   }
 
   async dispose(): Promise<void> {

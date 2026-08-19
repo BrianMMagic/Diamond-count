@@ -162,7 +162,32 @@ explicit that ten colours must not be assumed, and an image using four numbers
 produces four clusters. Clusters are then mapped to numbers by majority vote of
 confident readings.
 
-### 7. Combining the evidence — `core/classificationResolver.ts`
+### 7. Global consistency — `core/globalConsistency.ts`
+
+A kit uses a handful of numbers, not all ten. Deciding every marker against all
+ten digits independently reliably manufactures a scattering of numbers that are
+not in the image at all — the first real photograph tested produced 5 through 10
+on a card that only contains 1 to 4.
+
+Two things fix that:
+
+- **Tell it the number set.** The picker on the main screen is a hard
+  constraint. With 1–4 selected, Tesseract's character whitelist becomes `1234`
+  and the template matcher only ranks those digits, so an impossible reading
+  cannot be produced in the first place.
+- **Infer the set when not told.** A number is real if many confident readings
+  agree on it *or* it owns a substantial colour group. Anything clearing neither
+  bar is noise, and every marker that named it is **re-read** with the engine
+  narrowed to the numbers that do exist — a genuine second reading, not just a
+  fallback to whatever ranked second.
+
+Large, pure colour groups then **correct** disagreeing markers rather than just
+flagging them. Flagging is right for a handful of markers and useless for seven
+hundred; when a group of 200 identically-coloured markers is 95% "2" and a
+marker sits squarely inside it with a weak digit, the group wins outright. A
+confident, well-formed reading still survives and is flagged instead.
+
+### 8. Combining the evidence — `core/classificationResolver.ts`
 
 | Situation | Result |
 | --- | --- |
@@ -176,7 +201,7 @@ confident readings.
 A final consistency sweep demotes any marker whose ring colour sits squarely
 inside a large, pure cluster labelled something else.
 
-### 8. Confidence — `core/confidenceCalculator.ts`
+### 9. Confidence — `core/confidenceCalculator.ts`
 
 One 0–1 score from OCR confidence, variant agreement, colour confidence,
 number/colour agreement or conflict, detection quality, cluster purity and size
@@ -296,6 +321,9 @@ that are ever looked at.
   synthetic worst case sits around 80%. Real photographs of physical beads have
   edge shadows and do better, but this is the first thing to check against your
   own samples.
+- **Set the number picker.** Auto-inference works, but the digits on these cards
+  are only a few pixels tall and declaring the set removes a whole class of
+  error outright.
 - Tesseract loads its wasm core and language data from a CDN on first use. With
   no network the app falls back to the built-in classifier automatically.
 - The built-in classifier's templates are a generic sans-serif. If your kit uses a
@@ -311,8 +339,8 @@ src/core/cv/          image primitives: colour spaces, integral images, filters,
 src/core/             imageLoader · imagePreprocessor · markerDetector ·
                       markerDeduplicator · markerCropper · colorAnalyzer ·
                       colorClusterer · classificationResolver ·
-                      confidenceCalculator · resultCounter · missedMarkerFinder ·
-                      pipeline
+                      globalConsistency · confidenceCalculator · resultCounter ·
+                      missedMarkerFinder · pipeline
 src/core/classifier/  the NumberClassifier seam: digitFont · templateClassifier ·
                       tesseractClassifier · ensemble
 src/worker/           analysis worker + its message protocol

@@ -9,7 +9,14 @@ import { createClassifier } from './classifier/index.ts';
 import type { NumberClassifier } from './classifier/index.ts';
 import { analyzeColors, learnColorModel } from './colorAnalyzer.ts';
 import { assignClusterNumbers, clusterRingColors } from './colorClusterer.ts';
-import { flagInconsistencies, resolveMarker } from './classificationResolver.ts';
+import { resolveMarker } from './classificationResolver.ts';
+import {
+  DEFAULT_INFER,
+  enforceGlobalConsistency,
+  inferActiveNumbers,
+  rejectIsolatedDetections,
+} from './globalConsistency.ts';
+import type { ClassificationOutput } from './classifier/index.ts';
 import type { ResolveContext } from './classificationResolver.ts';
 import { findPossibleMissed } from './missedMarkerFinder.ts';
 import type {
@@ -24,7 +31,10 @@ export interface PipelineOptions {
   settings: DetectorSettings;
   onProgress?: (update: ProgressUpdate) => void;
   /** Injected in tests to avoid loading a real OCR engine. */
-  classifierFactory?: (useTesseract: boolean) => Promise<{ classifier: NumberClassifier; engine: string; warning?: string }>;
+  classifierFactory?: (
+    useTesseract: boolean,
+    allowedNumbers: number[] | null,
+  ) => Promise<{ classifier: NumberClassifier; engine: string; warning?: string }>;
 }
 
 const STAGE_LABELS: Record<PipelineStage, string> = {
@@ -107,11 +117,16 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   report('deduplicating', 1, `${sized.kept.length} unique markers`);
   await tick();
 
-  const markers: MarkerDetection[] = sized.kept.map((c) => ({
+  const allMarkers: MarkerDetection[] = sized.kept.map((c) => ({
     ...c,
     finalConfidence: 'review',
     classificationMethod: 'unknown',
   }));
+  // Shapes in the artwork underneath can pass the ring test; ones that are also
+  // stranded far from every other marker are dropped before we spend any
+  // recognition effort on them.
+  const isolation = rejectIsolatedDetections(allMarkers);
+  const markers = isolation.kept;
 
   // ---- Stage 4: crop extraction --------------------------------------------
   report('cropping', 0);
@@ -127,29 +142,9 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   timings.cropping = now() - t;
   report('cropping', 1);
 
-  // ---- Stage 5: number recognition (pass 1) --------------------------------
-  report('reading', 0);
-  t = now();
-  const factory = opts.classifierFactory ?? createClassifier;
-  const choice = await factory(settings.useTesseract);
-  const readings = await choice.classifier.classify(crops, (done, total) => {
-    report('reading', done / Math.max(1, total), `${done}/${total} markers read`);
-  });
-  await choice.classifier.dispose();
-  timings.reading = now() - t;
-
-  const histogram = new Array(10).fill(0);
-  markers.forEach((m, i) => {
-    const r = readings[i];
-    m.ocrPrediction = r.value;
-    m.ocrConfidence = r.confidence;
-    m.ocrAttempts = r.attempts;
-    m.glyphCount = r.glyphCount;
-    histogram[Math.min(9, Math.floor(r.confidence * 10))]++;
-  });
-  await tick();
-
-  // ---- Stage 6: colour measurement -----------------------------------------
+  // ---- Stage 5: colour measurement -----------------------------------------
+  // Colours depend only on geometry, so measuring them before recognition means
+  // the colour groups are already available when a reading needs checking.
   report('colors', 0);
   t = now();
   analyzeColors(original, markers);
@@ -157,11 +152,53 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   report('colors', 1);
   await tick();
 
+  // ---- Stage 6: number recognition (pass 1) --------------------------------
+  report('reading', 0);
+  t = now();
+  const factory = opts.classifierFactory ?? createClassifier;
+  const choice = await factory(settings.useTesseract, settings.allowedNumbers);
+  const readings = await choice.classifier.classify(crops, (done, total) => {
+    report('reading', done / Math.max(1, total), `${done}/${total} markers read`);
+  });
+  markers.forEach((m, i) => applyReading(m, readings[i]));
+  timings.reading = now() - t;
+  await tick();
+
   // ---- Stage 7: learn colours, cluster them --------------------------------
   report('clustering', 0);
   t = now();
+  let clusters = clusterRingColors(markers);
+  markers.forEach((m, i) => {
+    m.colorCluster = clusters.assignment[i];
+  });
+  assignClusterNumbers(markers, clusters);
+
+  // Which numbers does this image actually use?
+  const active = inferActiveNumbers(markers, clusters, {
+    ...DEFAULT_INFER,
+    userSet: settings.allowedNumbers,
+  });
+
+  // Give the markers that named an impossible number a genuine second reading
+  // with the engine narrowed to the numbers that exist, rather than only
+  // falling back to whatever the first pass ranked second.
+  const allowedSet = new Set(active.numbers);
+  const reread = markers
+    .map((m, i) => ({ m, i }))
+    .filter(({ m }) => m.ocrPrediction != null && !allowedSet.has(m.ocrPrediction));
+  if (reread.length > 0 && active.numbers.length < 10) {
+    report('reading', 0.98, `re-reading ${reread.length} markers as ${active.numbers.join(', ')}`);
+    choice.classifier.setAllowedNumbers(active.numbers);
+    const second = await choice.classifier.classify(reread.map(({ i }) => crops[i]));
+    reread.forEach(({ m }, k) => applyReading(m, second[k]));
+    assignClusterNumbers(markers, clusters);
+  }
+  await choice.classifier.dispose();
+
   const colorModel = learnColorModel(markers);
-  const clusters = clusterRingColors(markers);
+  // Re-cluster now that the readings are settled, so the groups are labelled
+  // from the corrected values rather than the first-pass guesses.
+  clusters = clusterRingColors(markers);
   markers.forEach((m, i) => {
     m.colorCluster = clusters.assignment[i];
   });
@@ -169,6 +206,9 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   timings.clustering = now() - t;
   report('clustering', 1, `${clusters.clusters.length} colour groups`);
   await tick();
+
+  const histogram = new Array(10).fill(0);
+  for (const m of markers) histogram[Math.min(9, Math.floor((m.ocrConfidence ?? 0) * 10))]++;
 
   // ---- Stage 8: resolve every marker ---------------------------------------
   report('resolving', 0);
@@ -180,7 +220,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   report('resolving', 1);
   await tick();
 
-  // ---- Stage 9: consistency check ------------------------------------------
+  // ---- Stage 9: global consistency -----------------------------------------
   report('verifying', 0);
   t = now();
   const disagreements = markers.filter(
@@ -190,8 +230,8 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       m.ocrPrediction !== m.colorPrediction &&
       (m.colorConfidence ?? 0) > 0.5,
   ).length;
+  const consistency = enforceGlobalConsistency(markers, active, clusters);
   const colorRescued = markers.filter((m) => m.classificationMethod === 'color').length;
-  flagInconsistencies(markers, ctx);
   const possibleMissed = findPossibleMissed(detection.nearMisses, markers);
   timings.verifying = now() - t;
   report('verifying', 1);
@@ -207,7 +247,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
     settings,
     stats: {
       candidatesProposed: detection.proposed,
-      candidatesRejected: detection.rejected + sized.dropped.length,
+      candidatesRejected: detection.rejected + sized.dropped.length + isolation.dropped.length,
       duplicatesMerged: deduped.merged,
       finalMarkers: markers.length,
       estimatedRadius: detection.radius / prepared.scale,
@@ -219,6 +259,11 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       colorClusters: clusters.clusters,
       ocrColorDisagreements: disagreements,
       colorRescued,
+      activeNumbers: active.numbers,
+      activeNumbersSource: active.source,
+      outOfVocabularyReadings: consistency.outOfVocabulary,
+      clusterCorrected: consistency.clusterCorrected,
+      isolatedRejected: isolation.dropped.length,
       durationMs: now() - started,
       stageTimings: timings,
     },
@@ -248,12 +293,33 @@ export function refineWithCorrections(result: AnalysisResult): AnalysisResult {
   const medianRadius = markers.length ? median(markers.map((m) => m.radius)) : 0;
   const ctx: ResolveContext = { model: colorModel, clusters, settings: result.settings, medianRadius };
   for (const m of markers) resolveMarker(m, ctx);
-  flagInconsistencies(markers, ctx);
+  const active = inferActiveNumbers(teaching, clusters, {
+    ...DEFAULT_INFER,
+    userSet: result.settings.allowedNumbers,
+  });
+  const consistency = enforceGlobalConsistency(markers, active, clusters);
   return {
     ...result,
     colorModel,
-    stats: { ...result.stats, colorClusters: clusters.clusters },
+    stats: {
+      ...result.stats,
+      colorClusters: clusters.clusters,
+      activeNumbers: active.numbers,
+      activeNumbersSource: active.source,
+      outOfVocabularyReadings: consistency.outOfVocabulary,
+      clusterCorrected: consistency.clusterCorrected,
+    },
   };
+}
+
+/** Copy one classifier result onto a marker. */
+function applyReading(marker: MarkerDetection, reading: ClassificationOutput | undefined): void {
+  if (!reading) return;
+  marker.ocrPrediction = reading.value;
+  marker.ocrConfidence = reading.confidence;
+  marker.ocrAttempts = reading.attempts;
+  marker.glyphCount = reading.glyphCount;
+  marker.ocrRanked = reading.ranked;
 }
 
 function now(): number {

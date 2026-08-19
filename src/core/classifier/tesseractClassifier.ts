@@ -1,6 +1,7 @@
 import type { GrayImage } from '../cv/image.ts';
 import type { MarkerCrop } from '../markerCropper.ts';
 import type { OcrAttempt } from '../types.ts';
+import { normalizeAllowed } from './types.ts';
 import type { ClassificationOutput, NumberClassifier } from './types.ts';
 
 type TessWorker = {
@@ -42,6 +43,36 @@ export class TesseractClassifier implements NumberClassifier {
   private worker: TessWorker | null = null;
   private mode: '10' | '8' | null = null;
   private initPromise: Promise<void> | null = null;
+  private allowed: Set<number> | null = null;
+
+  /**
+   * Narrowing the character whitelist is the single most effective constraint
+   * available: if the image only uses 1-4, the engine is physically unable to
+   * emit a 7, so a whole class of impossible readings disappears rather than
+   * having to be caught downstream.
+   */
+  setAllowedNumbers(allowed: number[] | null): void {
+    this.allowed = normalizeAllowed(allowed);
+    if (this.worker) void this.applyWhitelist();
+  }
+
+  private whitelist(): string {
+    if (!this.allowed) return '0123456789';
+    const digits = new Set<string>();
+    for (const n of this.allowed) {
+      if (n === 10) {
+        digits.add('1');
+        digits.add('0');
+      } else {
+        digits.add(String(n));
+      }
+    }
+    return [...digits].sort().join('');
+  }
+
+  private async applyWhitelist(): Promise<void> {
+    await this.worker?.setParameters({ tessedit_char_whitelist: this.whitelist() });
+  }
 
   async init(): Promise<void> {
     if (!this.initPromise) this.initPromise = this.doInit();
@@ -54,7 +85,7 @@ export class TesseractClassifier implements NumberClassifier {
     };
     this.worker = await mod.createWorker('eng');
     await this.worker.setParameters({
-      tessedit_char_whitelist: '0123456789',
+      tessedit_char_whitelist: this.whitelist(),
       classify_bln_numeric_mode: '1',
     });
   }
@@ -86,17 +117,25 @@ export class TesseractClassifier implements NumberClassifier {
   private async classifyOne(crop: MarkerCrop): Promise<ClassificationOutput> {
     const glyphCount = crop.glyphs.length;
     if (glyphCount === 0 || !this.worker) {
-      return { value: null, confidence: 0, attempts: [], glyphCount };
+      return { value: null, confidence: 0, attempts: [], glyphCount, ranked: [] };
     }
     await this.setMode(glyphCount > 1 ? '8' : '10');
     const attempts: OcrAttempt[] = [];
     try {
       const { data } = await this.worker.recognize(toCanvas(crop.ocrImage));
       const raw = data.text.replace(/[^0-9]/g, '');
-      const value = interpret(raw, glyphCount);
+      let value = interpret(raw, glyphCount);
+      if (value !== null && this.allowed && !this.allowed.has(value)) value = null;
       const confidence = Math.max(0, Math.min(1, data.confidence / 100));
       attempts.push({ variant: 'isolated', engine: this.name, value, confidence, raw: data.text.trim() });
-      return { value, confidence: value === null ? 0 : confidence, attempts, glyphCount };
+      return {
+        value,
+        confidence: value === null ? 0 : confidence,
+        attempts,
+        glyphCount,
+        // Tesseract exposes only its winning reading, so the ranking has one entry.
+        ranked: value === null ? [] : [{ value, score: confidence }],
+      };
     } catch (err) {
       attempts.push({
         variant: 'isolated',
@@ -105,7 +144,7 @@ export class TesseractClassifier implements NumberClassifier {
         confidence: 0,
         raw: `error: ${(err as Error).message}`,
       });
-      return { value: null, confidence: 0, attempts, glyphCount };
+      return { value: null, confidence: 0, attempts, glyphCount, ranked: [] };
     }
   }
 

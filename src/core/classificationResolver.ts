@@ -177,33 +177,3 @@ export function resolveMarker(marker: MarkerDetection, ctx: ResolveContext): voi
 function pct(v: number): string {
   return `${Math.round(v * 100)}%`;
 }
-
-/**
- * Consistency sweep over the finished set.
- *
- * Once most markers are settled, a few that were decided in isolation can be
- * checked against the population: a marker whose colour sits squarely inside a
- * large, pure cluster but which was labelled something else is worth a second
- * look even if its own numbers looked acceptable.
- */
-export function flagInconsistencies(markers: MarkerDetection[], ctx: ResolveContext): number {
-  let flagged = 0;
-  for (const marker of markers) {
-    if (marker.manualNumber != null || marker.rejected) continue;
-    const idx = marker.colorCluster ?? -1;
-    if (idx < 0) continue;
-    const cluster = ctx.clusters.clusters[idx];
-    if (!cluster || cluster.assignedNumber === null) continue;
-    if (cluster.size < 10 || cluster.purity < 0.9) continue;
-    if (marker.finalNumber === cluster.assignedNumber) continue;
-    if (marker.classificationMethod === 'manual') continue;
-    // Strong, agreeing readings survive; everything else is demoted.
-    if (marker.finalConfidence === 'high' && (marker.ocrConfidence ?? 0) >= 0.9) continue;
-    marker.finalConfidence = 'review';
-    marker.needsReview = true;
-    marker.finalScore = Math.min(marker.finalScore ?? 0.5, 0.5);
-    marker.reason = `${marker.reason ?? ''} Its ring colour matches ${cluster.size} markers counted as ${cluster.assignedNumber}.`.trim();
-    flagged++;
-  }
-  return flagged;
-}

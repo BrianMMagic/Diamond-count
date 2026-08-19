@@ -84,6 +84,8 @@ export interface MarkerDetection extends MarkerCandidate {
   ocrAttempts?: OcrAttempt[];
   /** True when the digit isolator found two glyphs (candidate for "10"). */
   glyphCount?: number;
+  /** All digit hypotheses, best first — lets a rejected reading fall back. */
+  ocrRanked?: Array<{ value: number; score: number }>;
 
   ringColor?: RingColor;
   colorPrediction?: number | null;
@@ -140,6 +142,15 @@ export interface ColorModel {
 }
 
 export interface DetectorSettings {
+  /**
+   * The numbers this image actually uses, e.g. [1, 2, 3, 4].
+   *
+   * `null` means "work it out from the image". When set it is a HARD
+   * constraint: the OCR engine is restricted to those digits and no marker may
+   * be classified as anything else. Kits come with a legend, so this is one tap
+   * for the user and by far the largest single accuracy lever available.
+   */
+  allowedNumbers: number[] | null;
   /** 0..1. Higher finds more markers (and more false positives). */
   markerSensitivity: number;
   /** 0..1. Higher accepts weaker OCR readings. */
@@ -155,6 +166,7 @@ export interface DetectorSettings {
 }
 
 export const DEFAULT_SETTINGS: DetectorSettings = {
+  allowedNumbers: null,
   markerSensitivity: 0.5,
   ocrSensitivity: 0.5,
   expectedMarkerSize: 0,
@@ -177,6 +189,16 @@ export interface PipelineStats {
   colorClusters: ColorCluster[];
   ocrColorDisagreements: number;
   colorRescued: number;
+  /** Numbers the image was judged to actually contain. */
+  activeNumbers: number[];
+  /** How that set was arrived at. */
+  activeNumbersSource: 'user' | 'inferred';
+  /** Readings discarded because they named a number not in the active set. */
+  outOfVocabularyReadings: number;
+  /** Markers corrected (not merely flagged) by their colour group. */
+  clusterCorrected: number;
+  /** Detections dropped because nothing marker-like sat near them. */
+  isolatedRejected: number;
   durationMs: number;
   stageTimings: Record<string, number>;
 }
