@@ -83,8 +83,9 @@ body {
 }
 
 .layout.has-viewer .stage {
-  flex: 1 1 45%;
-  min-height: 220px;
+  /* The overlay is the thing being verified, so it gets the larger share. */
+  flex: 1 1 58%;
+  min-height: 46vh;
   display: flex;
   flex-direction: column;
 }
@@ -1065,4 +1066,38 @@ h3 {
   background: var(--bg-raised);
   color: var(--text-dim);
   font-size: 13px;
+}
+
+/* ---------- full-screen viewer ----------
+   Verifying several hundred markers means zooming in and tapping them, which is
+   impossible in a strip a couple of hundred pixels tall on a phone. Full screen
+   sits BELOW the sheets (z-index 20) so tapping a marker still opens its
+   editor over the top. */
+.stage.is-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: var(--bg);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.stage.is-expanded .viewer {
+  flex: 1;
+}
+
+.viewer-expand {
+  font-size: 15px !important;
+}
+
+@media (min-width: 900px) {
+  .stage.is-expanded {
+    position: fixed;
+  }
+}
+
+.group-reject {
+  width: 100%;
+  color: #ffc9d2;
+  border-color: rgba(244, 63, 94, 0.4);
 }

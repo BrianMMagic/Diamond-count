@@ -274,6 +274,33 @@ export function useAppController() {
     });
   }, []);
 
+  /**
+   * Throw out every marker in a digit group.
+   *
+   * Shapes that are not markers at all tend to look like each other, so they
+   * land in groups of their own. Rejecting the group is one tap instead of
+   * hundreds, and is the fastest way to clear a batch of false detections.
+   */
+  const rejectMarkerGroup = useCallback((groupIndex: number) => {
+    setResult((prev) => {
+      if (!prev) return prev;
+      const markers = prev.markers.map((m) =>
+        m.shapeGroup === groupIndex
+          ? {
+              ...m,
+              rejected: true,
+              manualNumber: null,
+              finalNumber: null,
+              needsReview: false,
+              classificationMethod: 'manual' as const,
+              reason: 'You marked this whole group as not markers.',
+            }
+          : m,
+      );
+      return { ...prev, markers };
+    });
+  }, []);
+
   /** Re-learn colours from the corrections and re-decide the uncertain markers. */
   const applyCorrections = useCallback(() => {
     setResult((prev) => (prev ? refineWithCorrections({ ...prev, markers: prev.markers.map((m) => ({ ...m })) }) : prev));
@@ -340,6 +367,7 @@ export function useAppController() {
     confirmMissed,
     dismissMissed,
     relabelMarkerGroup,
+    rejectMarkerGroup,
     applyCorrections,
     setError,
   };

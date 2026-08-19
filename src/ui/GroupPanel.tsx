@@ -7,6 +7,7 @@ import { NumberPad } from './NumberPad.tsx';
 interface Props {
   result: AnalysisResult;
   onRelabel(groupIndex: number, value: number): void;
+  onReject(groupIndex: number): void;
 }
 
 /**
@@ -19,7 +20,7 @@ interface Props {
  * every marker in it. Checking six pictures beats reviewing seven hundred
  * markers, and it is also a far more reliable check.
  */
-export function GroupPanel({ result, onRelabel }: Props) {
+export function GroupPanel({ result, onRelabel, onReject }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
   const groups = result.stats.shapeGroups;
   if (groups.length === 0) return null;
@@ -29,7 +30,8 @@ export function GroupPanel({ result, onRelabel }: Props) {
       <h3>Digits found</h3>
       <p className="panel-lede">
         Each picture is the average of every marker that matched it, so it is much sharper than any
-        single marker. Check it against the number — changing one fixes every marker in that group.
+        single marker. Check it against the number — changing one fixes every marker in that group,
+        and a group that isn't markers at all can be removed in one tap.
       </p>
       {groups
         .slice()
@@ -61,14 +63,26 @@ export function GroupPanel({ result, onRelabel }: Props) {
                 </button>
               </div>
               {open && (
-                <NumberPad
-                  compact
-                  value={group.number}
-                  onPick={(v) => {
-                    onRelabel(group.index, v);
-                    setEditing(null);
-                  }}
-                />
+                <>
+                  <NumberPad
+                    compact
+                    value={group.number}
+                    onPick={(v) => {
+                      onRelabel(group.index, v);
+                      setEditing(null);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-quiet group-reject"
+                    onClick={() => {
+                      onReject(group.index);
+                      setEditing(null);
+                    }}
+                  >
+                    These aren't markers — remove all {group.count}
+                  </button>
+                </>
               )}
             </div>
           );

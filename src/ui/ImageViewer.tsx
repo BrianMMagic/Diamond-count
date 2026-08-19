@@ -13,6 +13,8 @@ interface Props {
   addMode: boolean;
   onSelect(marker: MarkerDetection | null): void;
   onAddAt(x: number, y: number): void;
+  expanded: boolean;
+  onToggleExpanded(): void;
 }
 
 interface View {
@@ -116,6 +118,12 @@ export function ImageViewer(props: Props) {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [fit]);
+
+  // Entering or leaving full screen changes the canvas box, so the image has to
+  // be re-fitted or it stays scaled for the old one.
+  useEffect(() => {
+    if (ready) requestAnimationFrame(() => fit());
+  }, [props.expanded, ready, fit]);
 
   const clampView = useCallback(() => {
     const view = viewRef.current;
@@ -240,6 +248,15 @@ export function ImageViewer(props: Props) {
         onWheel={onWheel}
       />
       <div className="viewer-zoom">
+        <button
+          type="button"
+          className="viewer-expand"
+          onClick={props.onToggleExpanded}
+          aria-label={props.expanded ? 'Exit full screen' : 'Full screen'}
+          title={props.expanded ? 'Exit full screen' : 'Full screen'}
+        >
+          {props.expanded ? '✕' : '⛶'}
+        </button>
         <button type="button" onClick={() => nudge(1 / 1.5)} aria-label="Zoom out">
           −
         </button>

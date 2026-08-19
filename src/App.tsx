@@ -18,6 +18,7 @@ export default function App() {
   const app = useAppController();
   const [sheet, setSheet] = useState<Sheet>('none');
   const [pendingAdd, setPendingAdd] = useState<{ x: number; y: number } | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(
     () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('debug'),
   );
@@ -78,7 +79,7 @@ export default function App() {
         {!hasImage && <UploadPanel onFile={app.openFile} />}
 
         {showViewer && app.image && (
-          <div className="stage">
+          <div className={`stage${expanded ? ' is-expanded' : ''}`}>
             <ImageViewer
               previewUrl={app.image.previewUrl}
               markers={app.result?.markers ?? []}
@@ -91,6 +92,8 @@ export default function App() {
                 setSheet(m ? 'marker' : 'none');
               }}
               onAddAt={onAddAt}
+              expanded={expanded}
+              onToggleExpanded={() => setExpanded((v) => !v)}
             />
             {app.result && (
               <div className="overlay-toggles">
@@ -167,7 +170,11 @@ export default function App() {
                 onReview={() => setSheet('review')}
                 onApplyCorrections={app.applyCorrections}
               />
-              <GroupPanel result={app.result} onRelabel={app.relabelMarkerGroup} />
+              <GroupPanel
+                result={app.result}
+                onRelabel={app.relabelMarkerGroup}
+                onReject={app.rejectMarkerGroup}
+              />
               <NumberSetPicker
                 value={app.settings.allowedNumbers}
                 onChange={(v) => app.setSettings({ ...app.settings, allowedNumbers: v })}
