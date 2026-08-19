@@ -1,5 +1,7 @@
 # Marker Count
 
+**Live app: https://brianmmagic.github.io/Diamond-count/**
+
 Photograph a picture covered in small numbered circles and get an accurate count
 for every number on it. Everything runs in the browser — **images are processed
 on your device and are not uploaded.**
