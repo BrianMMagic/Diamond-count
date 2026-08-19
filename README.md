@@ -111,35 +111,40 @@ components that are too small are paper noise, and what survives is sorted left
 to right. A two-glyph result is the "10" case, handled by classifying `1` and `0`
 separately.
 
-### 5. Group first, then read — `core/groupClassifier.ts`
+### 5. Group by digit shape, then read the average — `core/glyphClusterer.ts`
 
 On a card photographed at 2000px, a marker is 35-45px across and the printed
 digit inside it is **10-15 pixels tall**. Tesseract wants ~30px+ character
-height; below about 20px accuracy collapses. Upscaling the crop 3-4x invents
-nothing — a blurry 13px digit becomes a blurry 47px digit.
+height; below about 20px accuracy collapses. Upscaling 3-4x invents nothing — a
+blurry 13px digit becomes a blurry 47px digit.
 
-So reading all several hundred digits is the wrong shape of problem. An image
-contains a *handful of distinct markers*, not several hundred independent
-puzzles. Markers are grouped by appearance first, then only the ~20 clearest
-members of each group are read, and the group is labelled by their vote. A
-reader that is 95% accurate stops producing 35 errors across 700 markers and
-instead produces a label that twenty samples agree on.
+So reading every digit is the wrong shape of problem. An image contains a
+*handful of distinct markers*, not several hundred independent puzzles. Markers
+are matched **against each other** rather than against a typeface: glyphs are
+clustered by shape, and each cluster's members are **averaged**.
 
-Two guards keep this honest:
+That averaging is what makes the whole thing work. The noise on one marker is
+independent of the noise on the next while the digit is not, so the mean of two
+hundred instances is sharp where every individual one is mush. The classifier
+then reads **one clean picture per distinct digit** — typically four to six
+reads for an image holding several hundred markers — instead of hundreds of
+blurry ones. A 95%-accurate reader stops scattering 35 errors across 700
+markers.
 
-- **The sample is stratified.** Half the crispest members, half spread evenly
-  through the group. "Crispest" is not a neutral filter — if it correlates with
-  one digit's shape, a biased sample votes unanimously for the wrong answer.
-- **A split vote rejects the group.** Misreadings scatter across many digits, so
-  they never build a strong *second* place; a group that genuinely holds two
-  numbers does. When the runner-up gets more than a third of the winner's
-  support the group is marked ambiguous and its members are read individually
-  instead — unconstrained by anything the sample suggested, since that sample is
-  exactly the evidence that proved unreliable.
+The join threshold is measured, not guessed: across a sheet of known digits, two
+instances of the same digit never exceeded 0.51 pixels apart while two different
+digits never came closer than 0.85, so the boundary sits in that gap. Prototypes
+are then compared far more strictly than raw glyphs and near-identical piles are
+merged, which repairs over-splitting on a noisy photograph.
 
-The results screen shows the groups with a sample crop each, and relabelling one
-settles every marker in it. Checking four pictures against four numbers is a far
-better use of attention than stepping through seven hundred markers.
+**Colour does not get a vote.** One mislabelled colour group is hundreds of wrong
+markers at once — the failure mode is catastrophic rather than gradual, which is
+a bad trade when the job is counting. Ring colour is still measured, for the
+debug view and for markers whose digit could not be isolated at all, and
+`useColorAssist` turns it back on; it is off by default.
+
+The results screen shows each distinct digit as its averaged picture. Correcting
+one label settles every marker in that group.
 
 ### 6. Number recognition — `core/classifier/`
 
@@ -373,7 +378,7 @@ src/core/             imageLoader · imagePreprocessor · markerDetector ·
                       missedMarkerFinder · pipeline
 src/core/classifier/  the NumberClassifier seam: digitFont · templateClassifier ·
                       tesseractClassifier · ensemble
-src/core/groupClassifier.ts   group-first labelling and its split-vote guard
+src/core/glyphClusterer.ts    shape clustering and averaged-prototype reading
 src/worker/           analysis worker + its message protocol
 src/state/            app controller (load, analyse, correct, re-refine)
 src/ui/               viewer + overlay renderer, results, review, editor, debug

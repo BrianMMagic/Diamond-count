@@ -1,63 +1,54 @@
-import { useState } from 'react';
-import type { RgbaImage } from '../core/cv/image.ts';
-import type { AnalysisResult } from '../core/types.ts';
-import { MarkerThumb } from './MarkerThumb.tsx';
+import { useEffect, useRef, useState } from 'react';
+import { GLYPH_SIZE } from '../core/markerCropper.ts';
+import type { AnalysisResult, ShapeGroup } from '../core/types.ts';
+import { paintMask } from './canvasUtils.ts';
 import { NumberPad } from './NumberPad.tsx';
 
 interface Props {
   result: AnalysisResult;
-  original: RgbaImage;
   onRelabel(groupIndex: number, value: number): void;
 }
 
 /**
- * The marker groups, each with a sample crop and the number it was given.
+ * The distinct digits found in the image, each shown as the AVERAGE of every
+ * marker that matched it.
  *
- * This is where a correction is worth making: the groups are what the counts are
- * actually built from, so fixing one label here settles every marker in it at
- * once. Checking four pictures against four numbers is a far better use of the
- * user's attention than stepping through several hundred markers.
+ * This is the one screen worth checking. Any single marker is too small and too
+ * noisy to judge by eye, but the average of a few hundred is unmistakable — and
+ * because the counts are built from these groups, correcting one label settles
+ * every marker in it. Checking six pictures beats reviewing seven hundred
+ * markers, and it is also a far more reliable check.
  */
-export function GroupPanel({ result, original, onRelabel }: Props) {
+export function GroupPanel({ result, onRelabel }: Props) {
   const [editing, setEditing] = useState<number | null>(null);
-  const groups = result.stats.groups;
+  const groups = result.stats.shapeGroups;
   if (groups.length === 0) return null;
-
-  const sample = (index: number) => {
-    const inGroup = result.markers.filter((m) => m.colorCluster === index);
-    return inGroup.sort((a, b) => b.detectionScore - a.detectionScore)[0] ?? null;
-  };
 
   return (
     <section className="groups">
-      <h3>Marker groups</h3>
+      <h3>Digits found</h3>
       <p className="panel-lede">
-        Each group was labelled by reading its clearest markers. Check the picture matches the
-        number — changing one fixes every marker in that group.
+        Each picture is the average of every marker that matched it, so it is much sharper than any
+        single marker. Check it against the number — changing one fixes every marker in that group.
       </p>
       {groups
         .slice()
         .sort((a, b) => b.count - a.count)
         .map((group) => {
-          const rep = sample(group.index);
           const open = editing === group.index;
           return (
-            <div key={group.index} className={`group-row${group.ambiguous ? ' is-ambiguous' : ''}`}>
+            <div
+              key={group.index}
+              className={`group-row${group.number == null ? ' is-ambiguous' : ''}`}
+            >
               <div className="group-main">
-                {rep && <MarkerThumb original={original} marker={rep} size={54} context={1.2} />}
-                <span
-                  className="swatch swatch-lg"
-                  style={{ background: `rgb(${group.rgb[0]},${group.rgb[1]},${group.rgb[2]})` }}
-                />
+                <PrototypeGlyph group={group} />
                 <div className="group-text">
-                  <strong>
-                    {group.number == null ? 'Not identified' : `Number ${group.number}`}
-                  </strong>
+                  <strong>{group.number == null ? 'Not identified' : `Number ${group.number}`}</strong>
                   <small>
-                    {group.count} markers ·{' '}
-                    {group.ambiguous
-                      ? 'read individually — this colour covers more than one number'
-                      : `${group.sampled} sampled, ${Math.round(group.purity * 100)}% agreed`}
+                    {group.count} markers · averaged picture read at{' '}
+                    {Math.round(group.confidence * 100)}% · sharpness{' '}
+                    {Math.round(group.sharpness * 100)}%
                   </small>
                 </div>
                 <button
@@ -82,5 +73,33 @@ export function GroupPanel({ result, original, onRelabel }: Props) {
           );
         })}
     </section>
+  );
+}
+
+function PrototypeGlyph({ group }: { group: ShapeGroup }) {
+  const refs = useRef<Array<HTMLCanvasElement | null>>([]);
+  useEffect(() => {
+    for (let k = 0; k < group.glyphCount; k++) {
+      const canvas = refs.current[k];
+      if (!canvas) continue;
+      paintMask(
+        canvas,
+        group.prototype.slice(k * GLYPH_SIZE * GLYPH_SIZE, (k + 1) * GLYPH_SIZE * GLYPH_SIZE),
+        GLYPH_SIZE,
+        52,
+      );
+    }
+  }, [group]);
+  return (
+    <div className="prototype">
+      {Array.from({ length: group.glyphCount }, (_, k) => (
+        <canvas
+          key={k}
+          ref={(el) => {
+            refs.current[k] = el;
+          }}
+        />
+      ))}
+    </div>
   );
 }

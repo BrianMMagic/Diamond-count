@@ -3,7 +3,6 @@ import { loadImageFile, toTransferable, fromTransferable } from '../core/imageLo
 import type { LoadedImage } from '../core/imageLoader.ts';
 import { countMarkers } from '../core/resultCounter.ts';
 import { refineWithCorrections } from '../core/pipeline.ts';
-import { relabelGroup } from '../core/groupClassifier.ts';
 import { reviewPriority } from '../core/confidenceCalculator.ts';
 import { DEFAULT_SETTINGS } from '../core/types.ts';
 import type {
@@ -244,20 +243,31 @@ export function useAppController() {
     );
   }, []);
 
-  /** Relabel a whole colour group — one tap can settle hundreds of markers. */
+  /** Relabel a whole digit group — one tap can settle hundreds of markers. */
   const relabelMarkerGroup = useCallback((groupIndex: number, value: number) => {
     setResult((prev) => {
       if (!prev) return prev;
-      const markers = prev.markers.map((m) => ({ ...m }));
-      const assignment = new Int32Array(markers.map((m) => m.colorCluster ?? -1));
-      relabelGroup(markers, { clusters: [], assignment }, groupIndex, value);
+      const markers = prev.markers.map((m) =>
+        m.shapeGroup === groupIndex && !m.rejected
+          ? {
+              ...m,
+              finalNumber: value,
+              manualNumber: value,
+              classificationMethod: 'manual' as const,
+              finalConfidence: 'high' as const,
+              finalScore: 1,
+              needsReview: false,
+              reason: 'Set by you for this whole digit group.',
+            }
+          : m,
+      );
       return {
         ...prev,
         markers,
         stats: {
           ...prev.stats,
-          groups: prev.stats.groups.map((g) =>
-            g.index === groupIndex ? { ...g, number: value, ambiguous: false } : g,
+          shapeGroups: prev.stats.shapeGroups.map((g) =>
+            g.index === groupIndex ? { ...g, number: value, confidence: 1 } : g,
           ),
         },
       };

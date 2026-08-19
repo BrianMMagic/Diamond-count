@@ -12,17 +12,14 @@ import { assignClusterNumbers, clusterRingColors } from './colorClusterer.ts';
 import { resolveMarker } from './classificationResolver.ts';
 import {
   DEFAULT_INFER,
+  activeNumbersFromShapes,
   enforceGlobalConsistency,
   inferActiveNumbers,
   rejectIsolatedDetections,
 } from './globalConsistency.ts';
 import type { ClassificationOutput } from './classifier/index.ts';
-import {
-  applyGroups,
-  assignGroupNumbers,
-  groupSeparation,
-  selectRepresentatives,
-} from './groupClassifier.ts';
+import { clusterGlyphs, prototypeAsCrop } from './glyphClusterer.ts';
+import type { ShapeGroup } from './types.ts';
 import type { ResolveContext } from './classificationResolver.ts';
 import { findPossibleMissed } from './missedMarkerFinder.ts';
 import type {
@@ -158,21 +155,22 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   report('colors', 1);
   await tick();
 
-  // ---- Stage 6: group the markers, then read a sample of each group -------
+  // ---- Stage 6: group by digit SHAPE, then read the average of each group --
   //
-  // The digits are 10-15 pixels tall, which is below the height any OCR engine
-  // reads dependably. An image contains a handful of DISTINCT markers though,
-  // so instead of asking "what is this marker?" several hundred times and
-  // accumulating the error rate, we ask "what is this group?" a few times and
-  // answer it from the members that photographed most clearly.
+  // The digits are 10-15 pixels tall, below what any OCR engine reads
+  // dependably. But the noise on one marker is independent of the noise on the
+  // next while the digit itself is not, so the AVERAGE of a few hundred
+  // instances is sharp where every individual one is mush. Markers are matched
+  // against each other rather than against a typeface, which also means nothing
+  // here depends on a kit using the ink colours we happened to expect.
   report('clustering', 0);
   t = now();
-  let clusters = clusterRingColors(markers);
+  const shapes = clusterGlyphs(crops);
   markers.forEach((m, i) => {
-    m.colorCluster = clusters.assignment[i];
+    m.shapeGroup = shapes.assignment[i];
   });
   timings.clustering = now() - t;
-  report('clustering', 1, `${clusters.clusters.length} marker groups`);
+  report('clustering', 1, `${shapes.clusters.length} distinct digits found`);
   await tick();
 
   report('reading', 0);
@@ -180,75 +178,100 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   const factory = opts.classifierFactory ?? createClassifier;
   const choice = await factory(settings.useTesseract, settings.allowedNumbers);
 
-  const representatives = selectRepresentatives(markers, clusters);
-  const sampledIds = new Set(representatives.map((i) => markers[i].id));
-  const readings = await choice.classifier.classify(
-    representatives.map((i) => crops[i]),
-    (done, total) => report('reading', done / Math.max(1, total), `${done}/${total} sampled markers read`),
-  );
-  representatives.forEach((markerIndex, k) => applyReading(markers[markerIndex], readings[k]));
+  // One read per DISTINCT DIGIT, on a clean averaged picture — typically half a
+  // dozen calls for an image holding several hundred markers.
+  const prototypeCrops = shapes.clusters.map((c) => prototypeAsCrop(c, crops[c.members[0]]));
+  const prototypeReadings = prototypeCrops.length
+    ? await choice.classifier.classify(prototypeCrops, (done, total) =>
+        report('reading', done / Math.max(1, total), `${done}/${total} distinct digits read`),
+      )
+    : [];
+  let markersRead = prototypeCrops.length;
 
-  let groups = assignGroupNumbers(markers, clusters, sampledIds);
-  assignClusterNumbers(markers, clusters);
+  const shapeGroups: ShapeGroup[] = shapes.clusters.map((c, i) => ({
+    index: c.index,
+    number: prototypeReadings[i]?.value ?? null,
+    confidence: prototypeReadings[i]?.confidence ?? 0,
+    count: c.members.length,
+    sharpness: c.sharpness,
+    spread: c.spread,
+    glyphCount: c.glyphCount,
+    prototype: Array.from(c.prototype),
+  }));
 
-  // Groups whose samples disagreed are not colour-separable — some kits reuse a
-  // colour across two numbers — so their members get read individually after
-  // all. This guard is what stops the group shortcut being a worse answer.
-  //
-  // These reads are deliberately UNCONSTRAINED by anything inferred so far: the
-  // sample for this group is precisely the evidence that turned out to be
-  // unreliable, so narrowing the engine to what it suggested would lock in its
-  // mistake. Only a number set the user declared may constrain them.
-  const provisional = applyGroups(markers, clusters, groups);
-  let markersRead = representatives.length;
-  const stragglers = provisional.needIndividualReading.filter((i) => !sampledIds.has(markers[i].id));
-  if (stragglers.length > 0) {
-    report('reading', 0.9, `reading ${stragglers.length} markers individually`);
-    const extra = await choice.classifier.classify(stragglers.map((i) => crops[i]));
-    stragglers.forEach((markerIndex, k) => applyReading(markers[markerIndex], extra[k]));
-    markersRead += stragglers.length;
-    for (const i of stragglers) sampledIds.add(markers[i].id);
+  // Markers whose digit could not be isolated have nothing to match, so they
+  // are read on their own rather than being guessed at.
+  if (shapes.unreadable.length > 0) {
+    report('reading', 0.9, `reading ${shapes.unreadable.length} unmatched markers`);
+    const extra = await choice.classifier.classify(shapes.unreadable.map((i) => crops[i]));
+    shapes.unreadable.forEach((markerIndex, k) => applyReading(markers[markerIndex], extra[k]));
+    markersRead += shapes.unreadable.length;
   }
   await choice.classifier.dispose();
   timings.reading = now() - t;
   await tick();
 
-  // Only now, with every reading that is going to happen already in hand, is it
-  // safe to ask which numbers the image uses. Inferring it from the first
-  // sample and then constraining later reads to that guess makes an early bias
-  // self-fulfilling.
-  const active = inferActiveNumbers(markers, clusters, {
-    ...DEFAULT_INFER,
-    userSet: settings.allowedNumbers,
+  // Every member of a shape group inherits its group's reading.
+  markers.forEach((m, i) => {
+    const g = shapes.assignment[i];
+    if (g < 0) return;
+    const group = shapeGroups[g];
+    m.ocrPrediction = group.number;
+    m.ocrConfidence = group.confidence;
+    m.glyphCount = crops[i].glyphs.length;
   });
-  const allowedSet = new Set(active.numbers);
 
-  const colorModel = learnColorModel(markers);
-  assignClusterNumbers(markers, clusters);
-  groups = assignGroupNumbers(markers, clusters, sampledIds);
-  for (const g of groups) {
-    if (g.number !== null && !allowedSet.has(g.number)) {
-      g.number = null;
-      g.ambiguous = true;
-      g.source = 'unresolved';
-    }
-  }
-  const applied = applyGroups(markers, clusters, groups);
+  // Colour is measured for display and for the debug view, but it does not get
+  // a vote: one mislabelled colour group is hundreds of wrong markers at once,
+  // and the shape of the digit is the thing actually being counted.
+  const colorModel = settings.useColorAssist ? learnColorModel(markers) : { entries: [], minSeparation: Infinity, trained: false };
+  const clusters = clusterRingColors(markers);
+  markers.forEach((m, i) => {
+    m.colorCluster = clusters.assignment[i];
+  });
+  if (settings.useColorAssist) assignClusterNumbers(markers, clusters);
+
+  const active = activeNumbersFromShapes(shapeGroups, markers.length, settings.allowedNumbers);
+  const allowedSet = new Set(active.numbers);
 
   const histogram = new Array(10).fill(0);
   for (const m of markers) histogram[Math.min(9, Math.floor((m.ocrConfidence ?? 0) * 10))]++;
 
-  // ---- Stage 7: resolve whatever the groups could not settle ---------------
-  // Only markers in ambiguous groups reach the per-marker evidence combiner;
-  // for everything else the group has already answered.
+  // Assign from the shape groups.
+  let groupAssigned = 0;
+  markers.forEach((m, i) => {
+    const g = shapes.assignment[i];
+    if (g < 0) return;
+    const group = shapeGroups[g];
+    if (group.number === null || !allowedSet.has(group.number)) {
+      m.finalNumber = null;
+      m.finalConfidence = 'review';
+      m.finalScore = 0.2;
+      m.classificationMethod = 'unknown';
+      m.needsReview = true;
+      m.reason = `Its digit matches a group of ${group.count} markers that could not be identified.`;
+      return;
+    }
+    groupAssigned++;
+    m.finalNumber = group.number;
+    m.classificationMethod = 'ocr';
+    m.needsReview = false;
+    // A big, sharp group read confidently is strong evidence; a small or fuzzy
+    // one is not, and says so rather than pretending.
+    const strength = Math.min(1, group.count / 20) * group.sharpness * Math.max(0.4, group.confidence);
+    m.finalScore = Math.max(0.5, Math.min(1, 0.5 + 0.5 * strength));
+    m.finalConfidence = strength >= 0.45 ? 'high' : 'medium';
+    m.reason =
+      `Its digit matches ${group.count} markers whose averaged shape reads as ${group.number} ` +
+      `(${Math.round(group.confidence * 100)}% on the averaged picture).`;
+  });
+
+  // ---- Stage 7: resolve the markers no shape group claimed -----------------
   report('resolving', 0);
   t = now();
   const medianRadius = markers.length ? median(markers.map((m) => m.radius)) : 0;
   const ctx: ResolveContext = { model: colorModel, clusters, settings, medianRadius };
-  for (const i of applied.needIndividualReading) resolveMarker(markers[i], ctx);
-  for (const m of markers) {
-    if (m.finalNumber == null && !m.rejected && m.manualNumber == null) resolveMarker(m, ctx);
-  }
+  for (const i of shapes.unreadable) resolveMarker(markers[i], ctx);
   timings.resolving = now() - t;
   report('resolving', 1);
   await tick();
@@ -263,8 +286,14 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       m.ocrPrediction !== m.colorPrediction &&
       (m.colorConfidence ?? 0) > 0.5,
   ).length;
-  const ambiguousGroups = new Set(groups.filter((g) => g.ambiguous).map((g) => g.index));
-  const consistency = enforceGlobalConsistency(markers, active, clusters, ambiguousGroups);
+  // Colour may not overturn a shape group, so every colour group counts as
+  // ambiguous here; this pass now only prunes values the image does not use.
+  const consistency = enforceGlobalConsistency(
+    markers,
+    active,
+    clusters,
+    new Set(clusters.clusters.map((c) => c.index)),
+  );
   const colorRescued = markers.filter((m) => m.classificationMethod === 'color').length;
   const possibleMissed = findPossibleMissed(detection.nearMisses, markers);
   timings.verifying = now() - t;
@@ -299,16 +328,9 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       clusterCorrected: consistency.clusterCorrected,
       isolatedRejected: isolation.dropped.length,
       markersRead,
-      groups: groups.map((g) => ({
-        index: g.index,
-        number: g.number,
-        count: g.count,
-        rgb: g.rgb,
-        purity: g.purity,
-        sampled: g.sampled,
-        ambiguous: g.ambiguous,
-      })),
-      groupSeparation: groupSeparation(clusters),
+      shapeGroups,
+      groupAssigned,
+      unmatchedMarkers: shapes.unreadable.length,
       durationMs: now() - started,
       stageTimings: timings,
     },

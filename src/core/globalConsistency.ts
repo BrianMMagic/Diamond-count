@@ -1,6 +1,6 @@
 import { median } from './cv/threshold.ts';
 import type { ClusterResult } from './colorClusterer.ts';
-import type { MarkerDetection } from './types.ts';
+import type { MarkerDetection, ShapeGroup } from './types.ts';
 
 export interface ActiveNumbers {
   numbers: number[];
@@ -73,6 +73,38 @@ export function inferActiveNumbers(
     active.add(best[0]);
   }
 
+  return { numbers: [...active].sort((a, b) => a - b), source: 'inferred' };
+}
+
+/**
+ * The numbers an image uses, taken from the digit-shape groups.
+ *
+ * When shapes are the authority, the group is the right unit of evidence: a
+ * group of 40 markers that all share one printed shape is strong proof that the
+ * number exists, regardless of how confident reading its averaged picture
+ * happened to look. Judging by per-marker confidence instead throws away whole
+ * legitimate groups whose digit is simply harder to read than its neighbours.
+ */
+export function activeNumbersFromShapes(
+  groups: ShapeGroup[],
+  totalMarkers: number,
+  userSet: number[] | null,
+  minShare = 0.01,
+  minCount = 3,
+): ActiveNumbers {
+  if (userSet && userSet.length > 0) {
+    return { numbers: [...new Set(userSet)].sort((a, b) => a - b), source: 'user' };
+  }
+  const threshold = Math.max(minCount, Math.round(totalMarkers * minShare));
+  const active = new Set<number>();
+  for (const g of groups) {
+    if (g.number === null) continue;
+    if (g.count >= threshold) active.add(g.number);
+  }
+  if (active.size === 0) {
+    const best = groups.filter((g) => g.number !== null).sort((a, b) => b.count - a.count)[0];
+    if (best?.number != null) active.add(best.number);
+  }
   return { numbers: [...active].sort((a, b) => a - b), source: 'inferred' };
 }
 

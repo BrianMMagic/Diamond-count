@@ -74,6 +74,10 @@ export function DebugPanel({ result, original, onFocus, onClose }: Props) {
           <Stat label="Impossible readings" value={stats.outOfVocabularyReadings} />
           <Stat label="Corrected by colour group" value={stats.clusterCorrected} />
           <Stat label="Isolated detections cut" value={stats.isolatedRejected} />
+          <Stat label="Distinct digits found" value={stats.shapeGroups.length} />
+          <Stat label="Counted from a group" value={stats.groupAssigned} />
+          <Stat label="Unmatched markers" value={stats.unmatchedMarkers} />
+          <Stat label="Reads performed" value={stats.markersRead} />
           <Stat label="Total time" value={`${(stats.durationMs / 1000).toFixed(1)} s`} />
         </div>
 

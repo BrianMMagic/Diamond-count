@@ -167,11 +167,7 @@ export default function App() {
                 onReview={() => setSheet('review')}
                 onApplyCorrections={app.applyCorrections}
               />
-              <GroupPanel
-                result={app.result}
-                original={app.image.full}
-                onRelabel={app.relabelMarkerGroup}
-              />
+              <GroupPanel result={app.result} onRelabel={app.relabelMarkerGroup} />
               <NumberSetPicker
                 value={app.settings.allowedNumbers}
                 onChange={(v) => app.setSettings({ ...app.settings, allowedNumbers: v })}

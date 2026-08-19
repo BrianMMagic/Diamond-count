@@ -84,6 +84,8 @@ export interface MarkerDetection extends MarkerCandidate {
   ocrAttempts?: OcrAttempt[];
   /** True when the digit isolator found two glyphs (candidate for "10"). */
   glyphCount?: number;
+  /** Index of the digit-shape group this marker was matched to, or -1. */
+  shapeGroup?: number;
   /** All digit hypotheses, best first — lets a rejected reading fall back. */
   ocrRanked?: Array<{ value: number; score: number }>;
 
@@ -163,6 +165,14 @@ export interface DetectorSettings {
   workingResolution: number;
   /** Try to load Tesseract; falls back to the built-in classifier if it fails. */
   useTesseract: boolean;
+  /**
+   * Let ring colour influence classification.
+   *
+   * Off by default: one mislabelled colour group is hundreds of wrong markers at
+   * once, and the digit's shape is the thing actually being counted. Colour is
+   * still measured, for the debug view and for markers with no readable digit.
+   */
+  useColorAssist: boolean;
 }
 
 export const DEFAULT_SETTINGS: DetectorSettings = {
@@ -173,7 +183,24 @@ export const DEFAULT_SETTINGS: DetectorSettings = {
   colorAssistStrength: 0.6,
   workingResolution: 2000,
   useTesseract: true,
+  useColorAssist: false,
 };
+
+/** One distinct digit shape found in the image, and the number it reads as. */
+export interface ShapeGroup {
+  index: number;
+  number: number | null;
+  /** Confidence of reading the AVERAGED picture, not any single marker. */
+  confidence: number;
+  count: number;
+  /** 0..1 — how consistently the members agree, i.e. how sharp the average is. */
+  sharpness: number;
+  /** Mean distance of members to the averaged shape, in pixels. */
+  spread: number;
+  glyphCount: number;
+  /** Averaged glyph mask(s), 32x32 each, laid out side by side. */
+  prototype: number[];
+}
 
 export interface PipelineStats {
   candidatesProposed: number;
@@ -199,18 +226,12 @@ export interface PipelineStats {
   clusterCorrected: number;
   /** How many markers were actually put through the digit reader. */
   markersRead: number;
-  /** Colour groups found, with the number each was labelled. */
-  groups: Array<{
-    index: number;
-    number: number | null;
-    count: number;
-    rgb: [number, number, number];
-    purity: number;
-    sampled: number;
-    ambiguous: boolean;
-  }>;
-  /** Median colour distance between groups — how separable this kit is. */
-  groupSeparation: number;
+  /** Distinct digit shapes found, and what each was read as. */
+  shapeGroups: ShapeGroup[];
+  /** Markers counted from a shape group rather than an individual reading. */
+  groupAssigned: number;
+  /** Markers whose digit could not be isolated, so had to be read alone. */
+  unmatchedMarkers: number;
   /** Detections dropped because nothing marker-like sat near them. */
   isolatedRejected: number;
   durationMs: number;
