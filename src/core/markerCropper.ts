@@ -8,9 +8,16 @@ import { connectedComponents } from './cv/connected.ts';
 import type { MarkerCandidate } from './types.ts';
 
 /** Side of the normalised crop. Big enough that a 6px printed digit becomes ~40px. */
-export const NORM_SIZE = 160;
-/** Crop side as a multiple of the marker radius: ring plus a little context. */
-export const CROP_FACTOR = 2.6;
+export const NORM_SIZE = 192;
+/**
+ * Crop side as a multiple of the marker radius.
+ *
+ * Deliberately generous. The detector's radius estimate can run ~20% small on a
+ * busy photograph, and a tight window then clips the very digit we are trying to
+ * read -- which surfaces as "OCR failed" on markers that are perfectly legible.
+ * A wider window costs a little work and lets the centre be MEASURED instead.
+ */
+export const CROP_FACTOR = 3.2;
 /** Normalised glyph bitmaps handed to the classifier. */
 export const GLYPH_SIZE = 32;
 
@@ -131,10 +138,12 @@ function measureCenterRadius(img: GrayImage, ringRadius: number): number {
     const sa = Math.sin(th);
     // Reference brightness just off-centre, away from the digit itself.
     let reference = centre;
-    for (let r = ringRadius * 0.2; r <= ringRadius * 0.45; r += 1) {
+    for (let r = ringRadius * 0.15; r <= ringRadius * 0.4; r += 1) {
       reference = Math.max(reference, grayAt(img, Math.round(half + ca * r), Math.round(half + sa * r)));
     }
-    for (let r = ringRadius * 0.45; r <= ringRadius * 1.1; r += 1) {
+    // Scan well past the nominal ring: when the radius estimate is low, the real
+    // ring sits outside where it was expected.
+    for (let r = ringRadius * 0.4; r <= ringRadius * 1.6; r += 1) {
       const v = grayAt(img, Math.round(half + ca * r), Math.round(half + sa * r));
       if (v < reference - 45) {
         hits.push(r);
@@ -145,9 +154,9 @@ function measureCenterRadius(img: GrayImage, ringRadius: number): number {
   if (hits.length < 12) return fallback;
   // Stop just short of the ring edge we found.
   const measured = median(hits) * 0.9;
-  // Never stray far from the expected geometry: a wild measurement means the
-  // crop is not really a marker, and the fallback is the safer answer.
-  return Math.max(ringRadius * 0.45, Math.min(ringRadius * 0.78, measured));
+  // Wide bounds, because the point is to tolerate a poor radius estimate; only a
+  // measurement that is frankly impossible falls back.
+  return Math.max(ringRadius * 0.3, Math.min(ringRadius * 1.25, measured));
 }
 
 /**

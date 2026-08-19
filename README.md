@@ -92,6 +92,29 @@ a range of radii on a small copy and the winning scale (normalised for
 circumference) is used, then detection is re-run once at the radius actually
 measured.
 
+### 2b. "A marker has a number in it"
+
+The first real card produced **1,902 detections with 1,375 of them unknown** —
+roughly a thousand shapes in the photograph that are not markers at all, each
+arriving as a "?" for the user to resolve. The strongest available signal was
+going unused: a real marker has a digit printed inside it.
+
+So that is now a *detection* criterion, not just a classification outcome.
+Detections with no isolatable digit are set aside — not counted, and reported as
+"had no number inside" rather than queued as outstanding work. They stay visible
+and restorable in one tap.
+
+That also makes detection strictness **calibrated instead of assumed**. Each
+candidate setting is scored by how many of its detections actually carry a digit
+(sampled, not exhaustive), and the pipeline climbs towards whichever finds the
+most real markers. Because the digit requirement cleans up the surplus, it is
+free to detect loosely — the real risk is a pale ring missed for good, not a
+phantom counted.
+
+On a synthetic sheet of 210 markers salted with 220 ringed shapes that have no
+digit: every phantom rejected, `2`, `3` and `4` counted exactly, and **one**
+marker left needing review.
+
 ### 3. Duplicate removal — `core/markerDeduplicator.ts`
 
 Greedy non-maximum suppression over a uniform spatial grid, using both centre

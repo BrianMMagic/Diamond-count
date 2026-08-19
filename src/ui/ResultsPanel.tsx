@@ -24,6 +24,7 @@ export function ResultsPanel(props: Props) {
   const [copied, setCopied] = useState(false);
   const rows = countRows(summary, props.showAll);
   const allClassified = summary.needsReview === 0 && props.result.possibleMissed.length === 0;
+  const discarded = props.result.discarded.length;
   const base = props.fileName.replace(/\.[^.]+$/, '') || 'markers';
 
   return (
@@ -80,6 +81,13 @@ export function ResultsPanel(props: Props) {
           </li>
         )}
       </ul>
+
+      {discarded > 0 && (
+        <p className="results-note">
+          {discarded} detected shape{discarded === 1 ? '' : 's'} had no number inside and{' '}
+          {discarded === 1 ? 'was' : 'were'} not counted.
+        </p>
+      )}
 
       {allClassified ? (
         <p className="results-verdict is-good">All {summary.total} markers classified.</p>

@@ -32,6 +32,14 @@ export interface SynthOptions {
   radiusJitter?: number;
   /** Paint coloured blobs under the markers, like printed artwork. */
   artwork?: boolean;
+  /**
+   * Ringed shapes with NO digit inside, scattered over the sheet.
+   *
+   * These stand in for the circles a real photograph is full of -- texture in
+   * the picture underneath, bokeh, fabric weave -- which pass a ring test and
+   * are the main source of phantom markers.
+   */
+  distractors?: number;
   seed?: number;
 }
 
@@ -180,6 +188,21 @@ export function synthesize(opts: SynthOptions): {
     markers.push({ x, y, radius: r, number });
   });
 
+  // Ringed shapes with no digit: the phantom markers a real photo produces.
+  // Placed clear of the real markers -- texture in the picture underneath sits
+  // BESIDE the markers, it does not paint over them, and a distractor drawn on
+  // top of a marker would be measuring the wrong thing entirely.
+  for (let d = 0, tries = 0; d < (opts.distractors ?? 0) && tries < 20000; tries++) {
+    const r = radius * (0.7 + rand() * 0.6);
+    const x = r + rand() * (width - 2 * r);
+    const y = r + rand() * (height - 2 * r);
+    const clash = markers.some((m) => Math.hypot(m.x - x, m.y - y) < (m.radius + r) * 1.15);
+    if (clash) continue;
+    const shade = 60 + rand() * 120;
+    drawBlankRing(img, x, y, r, [shade, shade * 0.9, shade * 0.8]);
+    d++;
+  }
+
   if (opts.lightingGradient) applyLighting(img, opts.lightingGradient);
   if (opts.blur) applyBlur(img, opts.blur);
   if (opts.noise) applyNoise(img, opts.noise, rand);
@@ -192,6 +215,30 @@ export function synthesize(opts: SynthOptions): {
     truth: { image: 'synthetic', counts, total: markers.length },
     markers,
   };
+}
+
+/** A ring with a light centre but nothing printed inside it. */
+function drawBlankRing(
+  img: RgbaImage,
+  cx: number,
+  cy: number,
+  radius: number,
+  ring: [number, number, number],
+): void {
+  const rOuter = radius * 1.08;
+  const rInner = radius * 0.8;
+  const centre: [number, number, number] = [235, 233, 230];
+  for (let y = Math.max(0, cy - rOuter - 2) | 0; y < Math.min(img.height, cy + rOuter + 2); y++) {
+    for (let x = Math.max(0, cx - rOuter - 2) | 0; x < Math.min(img.width, cx + rOuter + 2); x++) {
+      const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+      const outer = coverage(d, rOuter);
+      const inner = coverage(d, rInner);
+      if (outer <= 0) continue;
+      const i = (y * img.width + x) * 4;
+      blend(img, i, ring, outer - inner);
+      blend(img, i, centre, inner);
+    }
+  }
 }
 
 function paintArtwork(img: RgbaImage, rand: () => number): void {

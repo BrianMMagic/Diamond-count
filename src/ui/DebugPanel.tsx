@@ -78,6 +78,9 @@ export function DebugPanel({ result, original, onFocus, onClose }: Props) {
           <Stat label="Counted from a group" value={stats.groupAssigned} />
           <Stat label="Unmatched markers" value={stats.unmatchedMarkers} />
           <Stat label="Reads performed" value={stats.markersRead} />
+          <Stat label="No digit, discarded" value={stats.discardedWithoutDigit} />
+          <Stat label="Detections with a digit" value={`${Math.round(stats.detectionYield * 100)}%`} />
+          <Stat label="Chosen sensitivity" value={stats.detectionSensitivity.toFixed(2)} />
           <Stat label="Total time" value={`${(stats.durationMs / 1000).toFixed(1)} s`} />
         </div>
 

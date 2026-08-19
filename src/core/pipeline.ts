@@ -22,6 +22,7 @@ import { clusterGlyphs, prototypeAsCrop } from './glyphClusterer.ts';
 import type { ShapeGroup } from './types.ts';
 import type { ResolveContext } from './classificationResolver.ts';
 import { findPossibleMissed } from './missedMarkerFinder.ts';
+import type { MarkerCandidate } from './types.ts';
 import type {
   AnalysisResult,
   DetectorSettings,
@@ -103,11 +104,58 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
 
   // ---- Stage 2: detection ---------------------------------------------------
   t = now();
-  const detection = detectMarkers(prepared, {
-    sensitivity: settings.markerSensitivity,
-    expectedMarkerSize: settings.expectedMarkerSize,
-    onProgress: (f, detail) => report('detecting', f, detail),
-  });
+
+  // Detection strictness is CALIBRATED against the image rather than assumed.
+  //
+  // The one thing that reliably separates a marker from a shape in the artwork
+  // underneath is that a marker has a digit printed in it. So each candidate
+  // strictness is scored by how many of its detections actually contain a
+  // readable digit, measured on a sample, and the strictness that finds the most
+  // real markers wins. A loose setting that doubles the count while halving the
+  // hit rate loses; so does a strict one that throws away genuine markers.
+  const attempts: Array<{ sensitivity: number; outcome: ReturnType<typeof detectMarkers>; yield: number; estimated: number }> = [];
+  const tryDetect = async (sensitivity: number, step: number, steps: number) => {
+    const outcome = detectMarkers(prepared, {
+      sensitivity,
+      expectedMarkerSize: settings.expectedMarkerSize,
+      onProgress: (f, detail) => report('detecting', (step + f) / steps, detail),
+    });
+    const candidates = filterBySizeConsistency(deduplicate(outcome.accepted).markers).kept;
+    const hitRate = glyphYield(original, candidates);
+    // Detections that carry a digit: a direct estimate of real markers found.
+    const estimated = candidates.length * hitRate;
+    attempts.push({ sensitivity, outcome, yield: hitRate, estimated });
+    report(
+      'detecting',
+      (step + 1) / steps,
+      `${candidates.length} candidates, ${Math.round(hitRate * 100)}% carry a number`,
+    );
+    await tick();
+    return estimated;
+  };
+
+  // Climb towards whichever strictness finds the most markers that actually
+  // carry a digit, rather than assuming a setting. Loosening is explored first
+  // because the digit requirement now cleans up the extra candidates, so the
+  // real risk is a pale ring missed for good rather than a phantom counted.
+  const MAX_PASSES = 4;
+  let best = await tryDetect(settings.markerSensitivity, 0, 2);
+  if (attempts[0].yield < 0.92) {
+    let sensitivity = settings.markerSensitivity;
+    let improving = true;
+    while (improving && attempts.length < MAX_PASSES && sensitivity < 1) {
+      sensitivity = Math.min(1, sensitivity + 0.25);
+      const estimated = await tryDetect(sensitivity, attempts.length, attempts.length + 1);
+      improving = estimated > best;
+      if (improving) best = estimated;
+    }
+    // Only bother going stricter if loosening never helped.
+    if (attempts.length < MAX_PASSES && attempts[0].estimated >= best) {
+      await tryDetect(Math.max(0, settings.markerSensitivity - 0.25), attempts.length, attempts.length + 1);
+    }
+  }
+  const chosen = attempts.reduce((best, cur) => (cur.estimated > best.estimated ? cur : best));
+  const detection = chosen.outcome;
   timings.detecting = now() - t;
   await tick();
 
@@ -144,6 +192,29 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   }
   timings.cropping = now() - t;
   report('cropping', 1);
+
+  // Detections with no digit in them are not markers.
+  //
+  // Previously these were counted and flagged "needs review", which on a real
+  // photograph buried the user under a thousand items and made the totals
+  // meaningless. They are set aside as possible-missed instead: not counted,
+  // still visible, restorable in one tap if any of them turn out to be real.
+  const withDigit: MarkerDetection[] = [];
+  const withDigitCrops: MarkerCrop[] = [];
+  const discarded: MarkerDetection[] = [];
+  markers.forEach((m, i) => {
+    if (crops[i].glyphs.length > 0) {
+      withDigit.push(m);
+      withDigitCrops.push(crops[i]);
+    } else {
+      discarded.push(m);
+    }
+  });
+  markers.length = 0;
+  markers.push(...withDigit);
+  crops.length = 0;
+  crops.push(...withDigitCrops);
+  report('cropping', 1, `${markers.length} markers carry a number, ${discarded.length} set aside`);
 
   // ---- Stage 5: colour measurement -----------------------------------------
   // Colours depend only on geometry, so measuring them before recognition means
@@ -306,6 +377,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   return {
     markers,
     possibleMissed,
+    discarded,
     colorModel,
     settings,
     stats: {
@@ -331,6 +403,9 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       shapeGroups,
       groupAssigned,
       unmatchedMarkers: shapes.unreadable.length,
+      discardedWithoutDigit: discarded.length,
+      detectionYield: chosen.yield,
+      detectionSensitivity: chosen.sensitivity,
       durationMs: now() - started,
       stageTimings: timings,
     },
@@ -377,6 +452,25 @@ export function refineWithCorrections(result: AnalysisResult): AnalysisResult {
       clusterCorrected: consistency.clusterCorrected,
     },
   };
+}
+
+/**
+ * Fraction of a sample of candidates that contain an isolatable digit.
+ *
+ * Sampled rather than exhaustive: cropping every candidate at several
+ * strictness settings would cost more than the rest of the pipeline, and a
+ * couple of hundred is plenty to tell a good setting from a bad one.
+ */
+function glyphYield(original: RgbaImage, candidates: MarkerCandidate[], sample = 160): number {
+  if (candidates.length === 0) return 0;
+  const step = Math.max(1, Math.floor(candidates.length / sample));
+  let seen = 0;
+  let hits = 0;
+  for (let i = 0; i < candidates.length; i += step) {
+    seen++;
+    if (cropMarker(original, candidates[i]).glyphs.length > 0) hits++;
+  }
+  return seen === 0 ? 0 : hits / seen;
 }
 
 /** Copy one classifier result onto a marker. */

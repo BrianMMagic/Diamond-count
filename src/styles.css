@@ -1057,3 +1057,12 @@ h3 {
   border: 1px solid var(--line);
   background: #fff;
 }
+
+.results-note {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-size: 13px;
+}

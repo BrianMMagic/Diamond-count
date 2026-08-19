@@ -232,6 +232,12 @@ export interface PipelineStats {
   groupAssigned: number;
   /** Markers whose digit could not be isolated, so had to be read alone. */
   unmatchedMarkers: number;
+  /** Detections set aside because they contained no digit at all. */
+  discardedWithoutDigit: number;
+  /** Fraction of detections that carried a digit at the chosen strictness. */
+  detectionYield: number;
+  /** The strictness the calibration settled on. */
+  detectionSensitivity: number;
   /** Detections dropped because nothing marker-like sat near them. */
   isolatedRejected: number;
   durationMs: number;
@@ -241,6 +247,14 @@ export interface PipelineStats {
 export interface AnalysisResult {
   markers: MarkerDetection[];
   possibleMissed: MarkerCandidate[];
+  /**
+   * Detections set aside because they held no digit.
+   *
+   * Kept apart from `possibleMissed` so the results screen can report them as
+   * what they are -- things that turned out not to be markers -- instead of
+   * presenting a thousand rejected shapes as outstanding work.
+   */
+  discarded: MarkerCandidate[];
   colorModel: ColorModel;
   stats: PipelineStats;
   settings: DetectorSettings;
