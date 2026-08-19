@@ -10,6 +10,7 @@ import { DebugPanel } from './ui/DebugPanel.tsx';
 import { AdvancedSettings } from './ui/AdvancedSettings.tsx';
 import { NumberPad } from './ui/NumberPad.tsx';
 import { NumberSetPicker } from './ui/NumberSetPicker.tsx';
+import { GroupPanel } from './ui/GroupPanel.tsx';
 
 type Sheet = 'none' | 'marker' | 'review' | 'debug' | 'add';
 
@@ -165,6 +166,11 @@ export default function App() {
                 onToggleShowAll={app.setShowAllNumbers}
                 onReview={() => setSheet('review')}
                 onApplyCorrections={app.applyCorrections}
+              />
+              <GroupPanel
+                result={app.result}
+                original={app.image.full}
+                onRelabel={app.relabelMarkerGroup}
               />
               <NumberSetPicker
                 value={app.settings.allowedNumbers}

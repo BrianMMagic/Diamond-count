@@ -98,6 +98,13 @@ export function enforceGlobalConsistency(
   markers: MarkerDetection[],
   active: ActiveNumbers,
   clusters: ClusterResult,
+  /**
+   * Groups the group classifier could not label, because their readings split
+   * across two numbers. Their members were deliberately read individually, so
+   * this pass must not hand them back to the group -- doing so silently undoes
+   * the fallback and reinstates the very error it exists to prevent.
+   */
+  ambiguousGroups: Set<number> = new Set(),
 ): ConsistencyResult {
   const allowed = new Set(active.numbers);
   let outOfVocabulary = 0;
@@ -114,7 +121,11 @@ export function enforceGlobalConsistency(
         ? cluster.assignedNumber
         : null;
     const clusterTrusted =
-      clusterNumber !== null && cluster !== undefined && cluster.size >= 10 && cluster.purity >= 0.85;
+      clusterNumber !== null &&
+      cluster !== undefined &&
+      cluster.size >= 10 &&
+      cluster.purity >= 0.85 &&
+      !ambiguousGroups.has(cluster.index);
 
     // 1. A value the image does not contain cannot stand.
     if (marker.finalNumber != null && !allowed.has(marker.finalNumber)) {

@@ -1,9 +1,9 @@
 import type { GrayImage, RgbaImage } from './cv/image.ts';
-import { createGray, createRgba } from './cv/image.ts';
+import { createGray, createRgba, grayAt } from './cv/image.ts';
 import { toGray } from './cv/color.ts';
 import { autoContrast, unsharp } from './cv/filters.ts';
 import { upscaleGray, downscaleGray } from './cv/resize.ts';
-import { otsuThreshold, sauvola } from './cv/threshold.ts';
+import { median, otsuThreshold, sauvola } from './cv/threshold.ts';
 import { connectedComponents } from './cv/connected.ts';
 import type { MarkerCandidate } from './types.ts';
 
@@ -92,7 +92,11 @@ export function cropMarker(original: RgbaImage, marker: MarkerCandidate): Marker
   // The crop spans CROP_FACTOR * radius, so the ring lands at this radius once
   // the tile has been resampled to NORM_SIZE.
   const ringRadius = NORM_SIZE / CROP_FACTOR;
-  const innerRadius = ringRadius * 0.62;
+  // Measure the light centre rather than assuming it. The detector reports the
+  // middle of the ring stroke and is a few percent out either way; a disc sized
+  // from that assumption either clips a tall digit (which reads downstream as
+  // "OCR failed" on perfectly legible print) or swallows part of the ring.
+  const innerRadius = measureCenterRadius(enhanced, ringRadius);
 
   const binary = binarizeDisc(enhanced, innerRadius * 1.35);
   const glyphs = isolateGlyphs(enhanced, innerRadius);
@@ -109,6 +113,41 @@ export function cropMarker(original: RgbaImage, marker: MarkerCandidate): Marker
     innerRadius,
     ringRadius,
   };
+}
+
+/**
+ * Find the radius of the marker's light centre by walking outwards until the
+ * ring darkens the image, and taking the median across spokes so one spoke
+ * crossing the digit or a glare highlight cannot decide it.
+ */
+function measureCenterRadius(img: GrayImage, ringRadius: number): number {
+  const half = img.width / 2;
+  const fallback = ringRadius * 0.62;
+  const centre = grayAt(img, Math.round(half), Math.round(half));
+  const hits: number[] = [];
+  for (let a = 0; a < 24; a++) {
+    const th = (a / 24) * Math.PI * 2;
+    const ca = Math.cos(th);
+    const sa = Math.sin(th);
+    // Reference brightness just off-centre, away from the digit itself.
+    let reference = centre;
+    for (let r = ringRadius * 0.2; r <= ringRadius * 0.45; r += 1) {
+      reference = Math.max(reference, grayAt(img, Math.round(half + ca * r), Math.round(half + sa * r)));
+    }
+    for (let r = ringRadius * 0.45; r <= ringRadius * 1.1; r += 1) {
+      const v = grayAt(img, Math.round(half + ca * r), Math.round(half + sa * r));
+      if (v < reference - 45) {
+        hits.push(r);
+        break;
+      }
+    }
+  }
+  if (hits.length < 12) return fallback;
+  // Stop just short of the ring edge we found.
+  const measured = median(hits) * 0.9;
+  // Never stray far from the expected geometry: a wild measurement means the
+  // crop is not really a marker, and the fallback is the safer answer.
+  return Math.max(ringRadius * 0.45, Math.min(ringRadius * 0.78, measured));
 }
 
 /**
@@ -169,18 +208,29 @@ export function isolateGlyphs(img: GrayImage, innerRadius: number): Glyph[] {
 
   const { labels, components } = connectedComponents(mask, true);
 
-  // Any component reaching the rim of the disc is ring bleed, not a digit.
-  const touchesRim = new Uint8Array(components.length + 1);
-  const rim2 = (discR * 0.88) ** 2;
+  // Tell a printed digit from ring bleed by SHAPE, not by a radius cutoff.
+  //
+  // A digit fills the middle of the marker, so some of its pixels always come
+  // near the centre. Ring bleed is an arc: it hugs the boundary and never
+  // reaches inwards. Judging by "does it touch a rim band" instead needs a
+  // constant that is simultaneously wide enough to exclude the ring and narrow
+  // enough to keep a digit that fills the centre -- there isn't one, and getting
+  // it wrong silently drops good glyphs or swallows the ring.
+  const nearestRadius = new Float64Array(components.length + 1).fill(Infinity);
+  const farthestRadius = new Float64Array(components.length + 1);
   for (let y = 0; y < size; y++) {
     const dy = y - half;
     for (let x = 0; x < size; x++) {
       const l = labels[y * size + x];
       if (!l) continue;
       const dx = x - half;
-      if (dx * dx + dy * dy > rim2) touchesRim[l] = 1;
+      const d = Math.hypot(dx, dy);
+      if (d < nearestRadius[l]) nearestRadius[l] = d;
+      if (d > farthestRadius[l]) farthestRadius[l] = d;
     }
   }
+  const isRingBleed = (label: number) =>
+    nearestRadius[label] > discR * 0.55 || farthestRadius[label] > discR * 0.99;
 
   const discArea = Math.PI * discR * discR;
   const kept: Glyph[] = [];
@@ -189,9 +239,9 @@ export function isolateGlyphs(img: GrayImage, innerRadius: number): Glyph[] {
     if (c.area > discArea * 0.75) continue;
     const w = c.maxX - c.minX + 1;
     const h = c.maxY - c.minY + 1;
-    if (touchesRim[c.label]) continue;
-    if (h < discR * 0.40) continue; // digits span most of the centre's height
-    if (w > discR * 1.6 || h > discR * 2.0) continue;
+    if (isRingBleed(c.label)) continue;
+    if (h < discR * 0.35) continue; // digits span most of the centre's height
+    if (w > discR * 1.8 || h > discR * 2.1) continue;
     kept.push(extractGlyph(labels, size, c.label, c.minX, c.minY, w, h, c.area, c.holeCount));
   }
   kept.sort((a, b) => a.x - b.x);

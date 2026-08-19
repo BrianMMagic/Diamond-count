@@ -17,6 +17,12 @@ import {
   rejectIsolatedDetections,
 } from './globalConsistency.ts';
 import type { ClassificationOutput } from './classifier/index.ts';
+import {
+  applyGroups,
+  assignGroupNumbers,
+  groupSeparation,
+  selectRepresentatives,
+} from './groupClassifier.ts';
 import type { ResolveContext } from './classificationResolver.ts';
 import { findPossibleMissed } from './missedMarkerFinder.ts';
 import type {
@@ -152,70 +158,97 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   report('colors', 1);
   await tick();
 
-  // ---- Stage 6: number recognition (pass 1) --------------------------------
-  report('reading', 0);
-  t = now();
-  const factory = opts.classifierFactory ?? createClassifier;
-  const choice = await factory(settings.useTesseract, settings.allowedNumbers);
-  const readings = await choice.classifier.classify(crops, (done, total) => {
-    report('reading', done / Math.max(1, total), `${done}/${total} markers read`);
-  });
-  markers.forEach((m, i) => applyReading(m, readings[i]));
-  timings.reading = now() - t;
-  await tick();
-
-  // ---- Stage 7: learn colours, cluster them --------------------------------
+  // ---- Stage 6: group the markers, then read a sample of each group -------
+  //
+  // The digits are 10-15 pixels tall, which is below the height any OCR engine
+  // reads dependably. An image contains a handful of DISTINCT markers though,
+  // so instead of asking "what is this marker?" several hundred times and
+  // accumulating the error rate, we ask "what is this group?" a few times and
+  // answer it from the members that photographed most clearly.
   report('clustering', 0);
   t = now();
   let clusters = clusterRingColors(markers);
   markers.forEach((m, i) => {
     m.colorCluster = clusters.assignment[i];
   });
+  timings.clustering = now() - t;
+  report('clustering', 1, `${clusters.clusters.length} marker groups`);
+  await tick();
+
+  report('reading', 0);
+  t = now();
+  const factory = opts.classifierFactory ?? createClassifier;
+  const choice = await factory(settings.useTesseract, settings.allowedNumbers);
+
+  const representatives = selectRepresentatives(markers, clusters);
+  const sampledIds = new Set(representatives.map((i) => markers[i].id));
+  const readings = await choice.classifier.classify(
+    representatives.map((i) => crops[i]),
+    (done, total) => report('reading', done / Math.max(1, total), `${done}/${total} sampled markers read`),
+  );
+  representatives.forEach((markerIndex, k) => applyReading(markers[markerIndex], readings[k]));
+
+  let groups = assignGroupNumbers(markers, clusters, sampledIds);
   assignClusterNumbers(markers, clusters);
 
-  // Which numbers does this image actually use?
+  // Groups whose samples disagreed are not colour-separable — some kits reuse a
+  // colour across two numbers — so their members get read individually after
+  // all. This guard is what stops the group shortcut being a worse answer.
+  //
+  // These reads are deliberately UNCONSTRAINED by anything inferred so far: the
+  // sample for this group is precisely the evidence that turned out to be
+  // unreliable, so narrowing the engine to what it suggested would lock in its
+  // mistake. Only a number set the user declared may constrain them.
+  const provisional = applyGroups(markers, clusters, groups);
+  let markersRead = representatives.length;
+  const stragglers = provisional.needIndividualReading.filter((i) => !sampledIds.has(markers[i].id));
+  if (stragglers.length > 0) {
+    report('reading', 0.9, `reading ${stragglers.length} markers individually`);
+    const extra = await choice.classifier.classify(stragglers.map((i) => crops[i]));
+    stragglers.forEach((markerIndex, k) => applyReading(markers[markerIndex], extra[k]));
+    markersRead += stragglers.length;
+    for (const i of stragglers) sampledIds.add(markers[i].id);
+  }
+  await choice.classifier.dispose();
+  timings.reading = now() - t;
+  await tick();
+
+  // Only now, with every reading that is going to happen already in hand, is it
+  // safe to ask which numbers the image uses. Inferring it from the first
+  // sample and then constraining later reads to that guess makes an early bias
+  // self-fulfilling.
   const active = inferActiveNumbers(markers, clusters, {
     ...DEFAULT_INFER,
     userSet: settings.allowedNumbers,
   });
-
-  // Give the markers that named an impossible number a genuine second reading
-  // with the engine narrowed to the numbers that exist, rather than only
-  // falling back to whatever the first pass ranked second.
   const allowedSet = new Set(active.numbers);
-  const reread = markers
-    .map((m, i) => ({ m, i }))
-    .filter(({ m }) => m.ocrPrediction != null && !allowedSet.has(m.ocrPrediction));
-  if (reread.length > 0 && active.numbers.length < 10) {
-    report('reading', 0.98, `re-reading ${reread.length} markers as ${active.numbers.join(', ')}`);
-    choice.classifier.setAllowedNumbers(active.numbers);
-    const second = await choice.classifier.classify(reread.map(({ i }) => crops[i]));
-    reread.forEach(({ m }, k) => applyReading(m, second[k]));
-    assignClusterNumbers(markers, clusters);
-  }
-  await choice.classifier.dispose();
 
   const colorModel = learnColorModel(markers);
-  // Re-cluster now that the readings are settled, so the groups are labelled
-  // from the corrected values rather than the first-pass guesses.
-  clusters = clusterRingColors(markers);
-  markers.forEach((m, i) => {
-    m.colorCluster = clusters.assignment[i];
-  });
   assignClusterNumbers(markers, clusters);
-  timings.clustering = now() - t;
-  report('clustering', 1, `${clusters.clusters.length} colour groups`);
-  await tick();
+  groups = assignGroupNumbers(markers, clusters, sampledIds);
+  for (const g of groups) {
+    if (g.number !== null && !allowedSet.has(g.number)) {
+      g.number = null;
+      g.ambiguous = true;
+      g.source = 'unresolved';
+    }
+  }
+  const applied = applyGroups(markers, clusters, groups);
 
   const histogram = new Array(10).fill(0);
   for (const m of markers) histogram[Math.min(9, Math.floor((m.ocrConfidence ?? 0) * 10))]++;
 
-  // ---- Stage 8: resolve every marker ---------------------------------------
+  // ---- Stage 7: resolve whatever the groups could not settle ---------------
+  // Only markers in ambiguous groups reach the per-marker evidence combiner;
+  // for everything else the group has already answered.
   report('resolving', 0);
   t = now();
   const medianRadius = markers.length ? median(markers.map((m) => m.radius)) : 0;
   const ctx: ResolveContext = { model: colorModel, clusters, settings, medianRadius };
-  for (const m of markers) resolveMarker(m, ctx);
+  for (const i of applied.needIndividualReading) resolveMarker(markers[i], ctx);
+  for (const m of markers) {
+    if (m.finalNumber == null && !m.rejected && m.manualNumber == null) resolveMarker(m, ctx);
+  }
   timings.resolving = now() - t;
   report('resolving', 1);
   await tick();
@@ -230,7 +263,8 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       m.ocrPrediction !== m.colorPrediction &&
       (m.colorConfidence ?? 0) > 0.5,
   ).length;
-  const consistency = enforceGlobalConsistency(markers, active, clusters);
+  const ambiguousGroups = new Set(groups.filter((g) => g.ambiguous).map((g) => g.index));
+  const consistency = enforceGlobalConsistency(markers, active, clusters, ambiguousGroups);
   const colorRescued = markers.filter((m) => m.classificationMethod === 'color').length;
   const possibleMissed = findPossibleMissed(detection.nearMisses, markers);
   timings.verifying = now() - t;
@@ -264,6 +298,17 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       outOfVocabularyReadings: consistency.outOfVocabulary,
       clusterCorrected: consistency.clusterCorrected,
       isolatedRejected: isolation.dropped.length,
+      markersRead,
+      groups: groups.map((g) => ({
+        index: g.index,
+        number: g.number,
+        count: g.count,
+        rgb: g.rgb,
+        purity: g.purity,
+        sampled: g.sampled,
+        ambiguous: g.ambiguous,
+      })),
+      groupSeparation: groupSeparation(clusters),
       durationMs: now() - started,
       stageTimings: timings,
     },

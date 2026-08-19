@@ -197,6 +197,20 @@ export interface PipelineStats {
   outOfVocabularyReadings: number;
   /** Markers corrected (not merely flagged) by their colour group. */
   clusterCorrected: number;
+  /** How many markers were actually put through the digit reader. */
+  markersRead: number;
+  /** Colour groups found, with the number each was labelled. */
+  groups: Array<{
+    index: number;
+    number: number | null;
+    count: number;
+    rgb: [number, number, number];
+    purity: number;
+    sampled: number;
+    ambiguous: boolean;
+  }>;
+  /** Median colour distance between groups — how separable this kit is. */
+  groupSeparation: number;
   /** Detections dropped because nothing marker-like sat near them. */
   isolatedRejected: number;
   durationMs: number;

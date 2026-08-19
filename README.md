@@ -111,7 +111,37 @@ components that are too small are paper noise, and what survives is sorted left
 to right. A two-glyph result is the "10" case, handled by classifying `1` and `0`
 separately.
 
-### 5. Number recognition — `core/classifier/`
+### 5. Group first, then read — `core/groupClassifier.ts`
+
+On a card photographed at 2000px, a marker is 35-45px across and the printed
+digit inside it is **10-15 pixels tall**. Tesseract wants ~30px+ character
+height; below about 20px accuracy collapses. Upscaling the crop 3-4x invents
+nothing — a blurry 13px digit becomes a blurry 47px digit.
+
+So reading all several hundred digits is the wrong shape of problem. An image
+contains a *handful of distinct markers*, not several hundred independent
+puzzles. Markers are grouped by appearance first, then only the ~20 clearest
+members of each group are read, and the group is labelled by their vote. A
+reader that is 95% accurate stops producing 35 errors across 700 markers and
+instead produces a label that twenty samples agree on.
+
+Two guards keep this honest:
+
+- **The sample is stratified.** Half the crispest members, half spread evenly
+  through the group. "Crispest" is not a neutral filter — if it correlates with
+  one digit's shape, a biased sample votes unanimously for the wrong answer.
+- **A split vote rejects the group.** Misreadings scatter across many digits, so
+  they never build a strong *second* place; a group that genuinely holds two
+  numbers does. When the runner-up gets more than a third of the winner's
+  support the group is marked ambiguous and its members are read individually
+  instead — unconstrained by anything the sample suggested, since that sample is
+  exactly the evidence that proved unreliable.
+
+The results screen shows the groups with a sample crop each, and relabelling one
+settles every marker in it. Checking four pictures against four numbers is a far
+better use of attention than stepping through seven hundred markers.
+
+### 6. Number recognition — `core/classifier/`
 
 Recognition sits behind one interface:
 
@@ -142,7 +172,7 @@ disagreement reliably flags a marker for a human. If Tesseract cannot load
 (offline, blocked CDN, unsupported browser) the app degrades to the built-in
 reader rather than to an error screen, and says so in the debug panel.
 
-### 6. Colour analysis — `core/colorAnalyzer.ts`, `core/colorClusterer.ts`
+### 7. Colour analysis — `core/colorAnalyzer.ts`, `core/colorClusterer.ts`
 
 Nothing about colour is hard-coded. **The number → colour mapping is learned from
 each uploaded image**, so a kit where 3 is orange and one where 3 is teal both
@@ -162,7 +192,7 @@ explicit that ten colours must not be assumed, and an image using four numbers
 produces four clusters. Clusters are then mapped to numbers by majority vote of
 confident readings.
 
-### 7. Global consistency — `core/globalConsistency.ts`
+### 8. Global consistency — `core/globalConsistency.ts`
 
 A kit uses a handful of numbers, not all ten. Deciding every marker against all
 ten digits independently reliably manufactures a scattering of numbers that are
@@ -187,7 +217,7 @@ hundred; when a group of 200 identically-coloured markers is 95% "2" and a
 marker sits squarely inside it with a weak digit, the group wins outright. A
 confident, well-formed reading still survives and is flagged instead.
 
-### 8. Combining the evidence — `core/classificationResolver.ts`
+### 9. Combining the evidence — `core/classificationResolver.ts`
 
 | Situation | Result |
 | --- | --- |
@@ -201,7 +231,7 @@ confident, well-formed reading still survives and is flagged instead.
 A final consistency sweep demotes any marker whose ring colour sits squarely
 inside a large, pure cluster labelled something else.
 
-### 9. Confidence — `core/confidenceCalculator.ts`
+### 10. Confidence — `core/confidenceCalculator.ts`
 
 One 0–1 score from OCR confidence, variant agreement, colour confidence,
 number/colour agreement or conflict, detection quality, cluster purity and size
@@ -343,6 +373,7 @@ src/core/             imageLoader · imagePreprocessor · markerDetector ·
                       missedMarkerFinder · pipeline
 src/core/classifier/  the NumberClassifier seam: digitFont · templateClassifier ·
                       tesseractClassifier · ensemble
+src/core/groupClassifier.ts   group-first labelling and its split-vote guard
 src/worker/           analysis worker + its message protocol
 src/state/            app controller (load, analyse, correct, re-refine)
 src/ui/               viewer + overlay renderer, results, review, editor, debug

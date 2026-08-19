@@ -3,6 +3,7 @@ import { loadImageFile, toTransferable, fromTransferable } from '../core/imageLo
 import type { LoadedImage } from '../core/imageLoader.ts';
 import { countMarkers } from '../core/resultCounter.ts';
 import { refineWithCorrections } from '../core/pipeline.ts';
+import { relabelGroup } from '../core/groupClassifier.ts';
 import { reviewPriority } from '../core/confidenceCalculator.ts';
 import { DEFAULT_SETTINGS } from '../core/types.ts';
 import type {
@@ -243,6 +244,26 @@ export function useAppController() {
     );
   }, []);
 
+  /** Relabel a whole colour group — one tap can settle hundreds of markers. */
+  const relabelMarkerGroup = useCallback((groupIndex: number, value: number) => {
+    setResult((prev) => {
+      if (!prev) return prev;
+      const markers = prev.markers.map((m) => ({ ...m }));
+      const assignment = new Int32Array(markers.map((m) => m.colorCluster ?? -1));
+      relabelGroup(markers, { clusters: [], assignment }, groupIndex, value);
+      return {
+        ...prev,
+        markers,
+        stats: {
+          ...prev.stats,
+          groups: prev.stats.groups.map((g) =>
+            g.index === groupIndex ? { ...g, number: value, ambiguous: false } : g,
+          ),
+        },
+      };
+    });
+  }, []);
+
   /** Re-learn colours from the corrections and re-decide the uncertain markers. */
   const applyCorrections = useCallback(() => {
     setResult((prev) => (prev ? refineWithCorrections({ ...prev, markers: prev.markers.map((m) => ({ ...m })) }) : prev));
@@ -305,6 +326,7 @@ export function useAppController() {
     addMarker,
     confirmMissed,
     dismissMissed,
+    relabelMarkerGroup,
     applyCorrections,
     setError,
   };
