@@ -11,10 +11,7 @@ const CSV_FIELDS = [
   'confidence_score',
   'ocr_result',
   'ocr_confidence',
-  'color_prediction',
-  'color_confidence',
-  'color_distance',
-  'ring_rgb',
+  'shape_group',
   'classification_method',
   'review_status',
 ] as const;
@@ -41,10 +38,7 @@ export function toCsv(result: AnalysisResult): string {
       round(m.finalScore),
       m.ocrPrediction == null ? '' : String(m.ocrPrediction),
       round(m.ocrConfidence),
-      m.colorPrediction == null ? '' : String(m.colorPrediction),
-      round(m.colorConfidence),
-      round(m.colorDistance, 2),
-      m.ringColor ? `${Math.round(m.ringColor.r)} ${Math.round(m.ringColor.g)} ${Math.round(m.ringColor.b)}` : '',
+      m.shapeGroup == null || m.shapeGroup < 0 ? '' : String(m.shapeGroup),
       m.classificationMethod,
       m.rejected ? 'not-a-marker' : m.needsReview ? 'needs-review' : 'accepted',
     ];
@@ -66,7 +60,6 @@ export interface ExportedJson {
     rejected: number;
   };
   stats: AnalysisResult['stats'];
-  colorModel: AnalysisResult['colorModel'];
   markers: Array<Record<string, unknown>>;
 }
 
@@ -84,7 +77,6 @@ export function toJson(result: AnalysisResult, summary: CountSummary): ExportedJ
       rejected: summary.rejected,
     },
     stats: result.stats,
-    colorModel: result.colorModel,
     markers: result.markers.map(serializeMarker),
   };
 }
@@ -105,18 +97,7 @@ function serializeMarker(m: MarkerDetection): Record<string, unknown> {
     ocrConfidence: m.ocrConfidence == null ? null : Number(m.ocrConfidence.toFixed(3)),
     ocrAttempts: m.ocrAttempts,
     glyphCount: m.glyphCount ?? null,
-    colorPrediction: m.colorPrediction ?? null,
-    colorConfidence: m.colorConfidence == null ? null : Number(m.colorConfidence.toFixed(3)),
-    colorDistance: m.colorDistance == null ? null : Number(m.colorDistance.toFixed(2)),
-    colorCluster: m.colorCluster ?? null,
-    ringColor: m.ringColor
-      ? {
-          r: Math.round(m.ringColor.r),
-          g: Math.round(m.ringColor.g),
-          b: Math.round(m.ringColor.b),
-          lab: m.ringColor.lab.map((v) => Number(v.toFixed(2))),
-        }
-      : null,
+    shapeGroup: m.shapeGroup ?? null,
     detectionScore: Number(m.detectionScore.toFixed(3)),
     source: m.source,
     reason: m.reason,

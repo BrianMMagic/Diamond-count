@@ -80,12 +80,13 @@ describe('classification by digit shape', () => {
     expect(tens?.glyphCount).toBe(2);
   }, 90_000);
 
-  it('does not let colour decide anything by default', async () => {
+  it('never classifies anything by colour', async () => {
     const { image } = synthesize({ counts: { 2: 50, 3: 50 }, radius: 17, seed: 808 });
     const result = await run(image);
-    expect(DEFAULT_SETTINGS.useColorAssist).toBe(false);
+    // Colour is gone from the pipeline entirely; every counted marker comes
+    // from its digit, either via its shape group or read on its own.
     for (const m of result.markers) {
-      if (m.finalNumber != null) expect(m.classificationMethod).not.toBe('color');
+      if (m.finalNumber != null) expect(['group', 'ocr', 'manual']).toContain(m.classificationMethod);
     }
   }, 90_000);
 

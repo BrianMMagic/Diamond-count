@@ -35,26 +35,6 @@ describe('end-to-end pipeline', () => {
     expect(result.stats.finalMarkers).toBe(result.markers.length);
   }, 60_000);
 
-  it('learns a number-to-colour mapping from the image itself', async () => {
-    const { image } = synthesize({
-      counts: { 2: 30, 3: 30 },
-      radius: 18,
-      // Deliberately NOT the defaults: nothing may be hard-coded.
-      ringColors: { 2: [20, 90, 190], 3: [200, 40, 140] },
-      seed: 55,
-    });
-    const result = await runPipeline(image, {
-      settings: { ...DEFAULT_SETTINGS, useTesseract: false },
-      classifierFactory: offlineClassifier,
-    });
-    // At least one colour was learned, and the clusters match the two inks used.
-    expect(result.stats.colorClusters.length).toBeGreaterThanOrEqual(2);
-    expect(result.stats.colorClusters.length).toBeLessThanOrEqual(4);
-    for (const entry of result.colorModel.entries) {
-      expect(entry.samples).toBeGreaterThanOrEqual(4);
-    }
-  }, 60_000);
-
   it('never emits two markers for one physical marker', async () => {
     const { image } = synthesize({ counts: { 4: 40 }, radius: 20, seed: 77 });
     const result = await runPipeline(image, {

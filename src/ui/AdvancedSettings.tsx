@@ -51,21 +51,6 @@ export function AdvancedSettings({ settings, estimatedMarkerSize, onChange, onRe
         </label>
 
         <label className="field">
-          <span>
-            Colour assistance <em>{settings.colorAssistStrength.toFixed(2)}</em>
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={settings.colorAssistStrength}
-            onChange={(e) => set('colorAssistStrength', Number(e.target.value))}
-          />
-          <small>How much the learned ring colours may rescue unreadable digits.</small>
-        </label>
-
-        <label className="field">
           <span>Expected marker size (px)</span>
           <input
             type="number"

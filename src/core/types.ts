@@ -12,26 +12,7 @@ export type MarkerNumber = (typeof SUPPORTED_NUMBERS)[number];
 
 export type ConfidenceLevel = 'high' | 'medium' | 'review';
 
-export type ClassificationMethod =
-  | 'ocr'
-  | 'ocr+color'
-  | 'color'
-  | 'manual'
-  | 'unknown';
-
-export interface RingColor {
-  r: number;
-  g: number;
-  b: number;
-  h: number;
-  s: number;
-  v: number;
-  lab: [number, number, number];
-  /** Spread of the sampled ring pixels in Lab units; high means a noisy sample. */
-  spread: number;
-  /** Number of pixels that contributed to the median. */
-  samples: number;
-}
+export type ClassificationMethod = 'ocr' | 'group' | 'manual' | 'unknown';
 
 /** One attempt at reading the digit, from one preprocessing variant. */
 export interface OcrAttempt {
@@ -89,14 +70,6 @@ export interface MarkerDetection extends MarkerCandidate {
   /** All digit hypotheses, best first — lets a rejected reading fall back. */
   ocrRanked?: Array<{ value: number; score: number }>;
 
-  ringColor?: RingColor;
-  colorPrediction?: number | null;
-  colorConfidence?: number;
-  /** Perceptual distance (Delta E) to the learned colour for `colorPrediction`. */
-  colorDistance?: number;
-  /** Index into the discovered colour clusters, or -1. */
-  colorCluster?: number;
-
   finalNumber?: number | null;
   finalConfidence: ConfidenceLevel;
   /** 0..1 numeric score behind `finalConfidence`, for sorting the review queue. */
@@ -110,37 +83,6 @@ export interface MarkerDetection extends MarkerCandidate {
   rejected?: boolean;
   /** True while the marker still needs a human decision. */
   needsReview?: boolean;
-}
-
-/** A colour cluster discovered in this image (k-means over Lab). */
-export interface ColorCluster {
-  index: number;
-  lab: [number, number, number];
-  rgb: [number, number, number];
-  size: number;
-  /** Mean Delta E of members to the centroid. */
-  spread: number;
-  /** Number assigned via OCR-confirmed members, or null when unmapped. */
-  assignedNumber: number | null;
-  /** Fraction of OCR-confirmed members that agreed on `assignedNumber`. */
-  purity: number;
-}
-
-/** Learned "number -> typical ring colour" model, built from this image alone. */
-export interface ColorModelEntry {
-  number: number;
-  lab: [number, number, number];
-  rgb: [number, number, number];
-  /** Robust spread (median absolute Delta E) of the training samples. */
-  spread: number;
-  samples: number;
-}
-
-export interface ColorModel {
-  entries: ColorModelEntry[];
-  /** Smallest Delta E between any two learned colours — how separable they are. */
-  minSeparation: number;
-  trained: boolean;
 }
 
 export interface DetectorSettings {
@@ -159,20 +101,10 @@ export interface DetectorSettings {
   ocrSensitivity: number;
   /** Expected marker diameter in original-image pixels; 0 = estimate it. */
   expectedMarkerSize: number;
-  /** 0..1. How strongly learned colours may override or rescue weak OCR. */
-  colorAssistStrength: number;
   /** Longest edge of the detection working copy, in pixels. */
   workingResolution: number;
   /** Try to load Tesseract; falls back to the built-in classifier if it fails. */
   useTesseract: boolean;
-  /**
-   * Let ring colour influence classification.
-   *
-   * Off by default: one mislabelled colour group is hundreds of wrong markers at
-   * once, and the digit's shape is the thing actually being counted. Colour is
-   * still measured, for the debug view and for markers with no readable digit.
-   */
-  useColorAssist: boolean;
 }
 
 export const DEFAULT_SETTINGS: DetectorSettings = {
@@ -180,10 +112,8 @@ export const DEFAULT_SETTINGS: DetectorSettings = {
   markerSensitivity: 0.5,
   ocrSensitivity: 0.5,
   expectedMarkerSize: 0,
-  colorAssistStrength: 0.6,
   workingResolution: 2000,
   useTesseract: true,
-  useColorAssist: false,
 };
 
 /** One distinct digit shape found in the image, and the number it reads as. */
@@ -213,9 +143,6 @@ export interface PipelineStats {
   imageHeight: number;
   ocrEngine: string;
   ocrConfidenceHistogram: number[];
-  colorClusters: ColorCluster[];
-  ocrColorDisagreements: number;
-  colorRescued: number;
   /** Numbers the image was judged to actually contain. */
   activeNumbers: number[];
   /** How that set was arrived at. */
@@ -255,7 +182,6 @@ export interface AnalysisResult {
    * presenting a thousand rejected shapes as outstanding work.
    */
   discarded: MarkerCandidate[];
-  colorModel: ColorModel;
   stats: PipelineStats;
   settings: DetectorSettings;
 }
@@ -266,7 +192,6 @@ export type PipelineStage =
   | 'deduplicating'
   | 'cropping'
   | 'reading'
-  | 'colors'
   | 'clustering'
   | 'resolving'
   | 'verifying'

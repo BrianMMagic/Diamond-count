@@ -13,7 +13,6 @@ export interface OverlayOptions {
 export const MARKER_COLORS = {
   high: '#16a34a',
   medium: '#0ea5e9',
-  color: '#8b5cf6',
   review: '#f59e0b',
   manual: '#db2777',
   rejected: '#94a3b8',
@@ -24,7 +23,6 @@ export function colorForMarker(m: MarkerDetection): string {
   if (m.rejected) return MARKER_COLORS.rejected;
   if (m.manualNumber != null) return MARKER_COLORS.manual;
   if (m.finalConfidence === 'review') return MARKER_COLORS.review;
-  if (m.classificationMethod === 'color') return MARKER_COLORS.color;
   if (m.finalConfidence === 'high') return MARKER_COLORS.high;
   return MARKER_COLORS.medium;
 }

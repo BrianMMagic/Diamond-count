@@ -6,11 +6,8 @@ import { countMarkers } from '../src/core/resultCounter.ts';
 import { DEFAULT_SETTINGS } from '../src/core/types.ts';
 import { inferActiveNumbers, rejectIsolatedDetections } from '../src/core/globalConsistency.ts';
 import type { MarkerDetection } from '../src/core/types.ts';
-import type { ClusterResult } from '../src/core/colorClusterer.ts';
 
 const offline = async () => ({ classifier: new TemplateClassifier(), engine: 'template' });
-
-const noClusters: ClusterResult = { clusters: [], assignment: new Int32Array(0) };
 
 function reading(id: string, value: number | null, confidence: number): MarkerDetection {
   return {
@@ -41,14 +38,14 @@ describe('active number set', () => {
     markers.push(reading('n2', 9, 0.88));
     markers.push(reading('n3', 8, 0.91));
 
-    const active = inferActiveNumbers(markers, noClusters);
+    const active = inferActiveNumbers(markers);
     expect(active.numbers).toEqual([1, 2, 3, 4]);
     expect(active.source).toBe('inferred');
   });
 
   it('takes the user at their word over anything it inferred', () => {
     const markers = [reading('a', 5, 0.99), reading('b', 5, 0.99), reading('c', 5, 0.99)];
-    const active = inferActiveNumbers(markers, noClusters, {
+    const active = inferActiveNumbers(markers, {
       userSet: [1, 2, 3, 4],
       minShare: 0.015,
       minCount: 4,
@@ -65,7 +62,7 @@ describe('active number set', () => {
       reading('c', 2, 0.9),
       reading('d', 2, 0.9),
     ];
-    const active = inferActiveNumbers(markers, noClusters);
+    const active = inferActiveNumbers(markers);
     expect(active.numbers.length).toBeGreaterThanOrEqual(1);
   });
 });

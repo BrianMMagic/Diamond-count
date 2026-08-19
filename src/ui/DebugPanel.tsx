@@ -11,7 +11,7 @@ interface Props {
   onClose(): void;
 }
 
-type Filter = 'all' | 'review' | 'color' | 'disagree' | 'unread';
+type Filter = 'all' | 'review' | 'grouped' | 'unread';
 
 const PAGE = 24;
 
@@ -32,12 +32,8 @@ export function DebugPanel({ result, original, onFocus, onClose }: Props) {
     switch (filter) {
       case 'review':
         return all.filter((m) => m.finalConfidence === 'review' || m.needsReview);
-      case 'color':
-        return all.filter((m) => m.classificationMethod === 'color');
-      case 'disagree':
-        return all.filter(
-          (m) => m.ocrPrediction != null && m.colorPrediction != null && m.ocrPrediction !== m.colorPrediction,
-        );
+      case 'grouped':
+        return all.filter((m) => m.classificationMethod === 'group');
       case 'unread':
         return all.filter((m) => m.ocrPrediction == null);
       default:
@@ -67,8 +63,6 @@ export function DebugPanel({ result, original, onFocus, onClose }: Props) {
           <Stat label="Marker diameter" value={`${Math.round(stats.estimatedRadius * 2)} px`} />
           <Stat label="Working scale" value={stats.workingScale.toFixed(3)} />
           <Stat label="OCR engine" value={stats.ocrEngine} />
-          <Stat label="OCR/colour conflicts" value={stats.ocrColorDisagreements} />
-          <Stat label="Rescued by colour" value={stats.colorRescued} />
           <Stat label="Numbers in image" value={stats.activeNumbers.join(', ') || '—'} />
           <Stat label="Number set from" value={stats.activeNumbersSource} />
           <Stat label="Impossible readings" value={stats.outOfVocabularyReadings} />
@@ -104,39 +98,9 @@ export function DebugPanel({ result, original, onFocus, onClose }: Props) {
           ))}
         </div>
 
-        <h3>Colour groups discovered</h3>
-        <ul className="clusters">
-          {stats.colorClusters.map((c) => (
-            <li key={c.index}>
-              <span className="swatch" style={{ background: `rgb(${c.rgb[0]},${c.rgb[1]},${c.rgb[2]})` }} />
-              <span>
-                {c.size} markers · {c.assignedNumber == null ? 'unassigned' : `number ${c.assignedNumber}`}
-                {c.assignedNumber != null && ` (${Math.round(c.purity * 100)}% pure)`} · spread{' '}
-                {c.spread.toFixed(1)}
-              </span>
-            </li>
-          ))}
-          {stats.colorClusters.length === 0 && <li>No colour groups were formed.</li>}
-        </ul>
-
-        <h3>Learned number → colour</h3>
-        <ul className="clusters">
-          {result.colorModel.entries.map((e) => (
-            <li key={e.number}>
-              <span className="swatch" style={{ background: `rgb(${e.rgb[0]},${e.rgb[1]},${e.rgb[2]})` }} />
-              <span>
-                {e.number} · {e.samples} samples · spread {e.spread.toFixed(1)}
-              </span>
-            </li>
-          ))}
-          {result.colorModel.entries.length === 0 && (
-            <li>Not enough confident readings to learn any colours.</li>
-          )}
-        </ul>
-
         <h3>Marker inspector</h3>
         <div className="debug-filters">
-          {(['review', 'disagree', 'color', 'unread', 'all'] as Filter[]).map((f) => (
+          {(['review', 'grouped', 'unread', 'all'] as Filter[]).map((f) => (
             <button
               key={f}
               type="button"
@@ -215,7 +179,6 @@ function MarkerDebugCard({
     });
   }, [crop]);
 
-  const ring = marker.ringColor;
   return (
     <div className="debug-card">
       <button type="button" className="debug-card-head" onClick={() => onFocus(marker.id)}>
@@ -241,20 +204,6 @@ function MarkerDebugCard({
         <dd>
           {marker.ocrPrediction ?? '—'} ({Math.round((marker.ocrConfidence ?? 0) * 100)}%)
           {marker.ocrAttempts?.length ? ` · ${marker.ocrAttempts.map((a) => `${a.engine}/${a.variant}:${a.raw || '∅'}`).join(' ')}` : ''}
-        </dd>
-        <dt>colour</dt>
-        <dd>
-          {ring && (
-            <span
-              className="swatch"
-              style={{ background: `rgb(${Math.round(ring.r)},${Math.round(ring.g)},${Math.round(ring.b)})` }}
-            />
-          )}
-          {marker.colorPrediction ?? '—'} ({Math.round((marker.colorConfidence ?? 0) * 100)}%) · ΔE{' '}
-          {marker.colorDistance == null || !Number.isFinite(marker.colorDistance)
-            ? '—'
-            : marker.colorDistance.toFixed(1)}{' '}
-          · cluster {marker.colorCluster ?? '—'}
         </dd>
         <dt>detect</dt>
         <dd>

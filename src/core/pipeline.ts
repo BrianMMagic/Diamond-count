@@ -7,14 +7,10 @@ import { cropMarker } from './markerCropper.ts';
 import type { MarkerCrop } from './markerCropper.ts';
 import { createClassifier } from './classifier/index.ts';
 import type { NumberClassifier } from './classifier/index.ts';
-import { analyzeColors, learnColorModel } from './colorAnalyzer.ts';
-import { assignClusterNumbers, clusterRingColors } from './colorClusterer.ts';
 import { resolveMarker } from './classificationResolver.ts';
 import {
-  DEFAULT_INFER,
   activeNumbersFromShapes,
   enforceGlobalConsistency,
-  inferActiveNumbers,
   rejectIsolatedDetections,
 } from './globalConsistency.ts';
 import type { ClassificationOutput } from './classifier/index.ts';
@@ -47,7 +43,6 @@ const STAGE_LABELS: Record<PipelineStage, string> = {
   deduplicating: 'Removing duplicates',
   cropping: 'Extracting markers',
   reading: 'Reading numbers',
-  colors: 'Analysing marker colours',
   clustering: 'Grouping marker colours',
   resolving: 'Combining evidence',
   verifying: 'Verifying detections',
@@ -61,7 +56,6 @@ const STAGE_RANGE: Record<PipelineStage, [number, number]> = {
   deduplicating: [0.36, 0.39],
   cropping: [0.39, 0.5],
   reading: [0.5, 0.8],
-  colors: [0.8, 0.87],
   clustering: [0.87, 0.9],
   resolving: [0.9, 0.95],
   verifying: [0.95, 0.98],
@@ -220,16 +214,6 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   crops.push(...withDigitCrops);
   report('cropping', 1, `${markers.length} markers carry a number, ${discarded.length} set aside`);
 
-  // ---- Stage 5: colour measurement -----------------------------------------
-  // Colours depend only on geometry, so measuring them before recognition means
-  // the colour groups are already available when a reading needs checking.
-  report('colors', 0);
-  t = now();
-  analyzeColors(original, markers);
-  timings.colors = now() - t;
-  report('colors', 1);
-  await tick();
-
   // ---- Stage 6: group by digit SHAPE, then read the average of each group --
   //
   // The digits are 10-15 pixels tall, below what any OCR engine reads
@@ -296,16 +280,6 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
     m.glyphCount = crops[i].glyphs.length;
   });
 
-  // Colour is measured for display and for the debug view, but it does not get
-  // a vote: one mislabelled colour group is hundreds of wrong markers at once,
-  // and the shape of the digit is the thing actually being counted.
-  const colorModel = settings.useColorAssist ? learnColorModel(markers) : { entries: [], minSeparation: Infinity, trained: false };
-  const clusters = clusterRingColors(markers);
-  markers.forEach((m, i) => {
-    m.colorCluster = clusters.assignment[i];
-  });
-  if (settings.useColorAssist) assignClusterNumbers(markers, clusters);
-
   const active = activeNumbersFromShapes(shapeGroups, markers.length, settings.allowedNumbers);
   const allowedSet = new Set(active.numbers);
 
@@ -329,7 +303,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
     }
     groupAssigned++;
     m.finalNumber = group.number;
-    m.classificationMethod = 'ocr';
+    m.classificationMethod = 'group';
     m.needsReview = false;
     // A big, sharp group read confidently is strong evidence; a small or fuzzy
     // one is not, and says so rather than pretending.
@@ -345,7 +319,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   report('resolving', 0);
   t = now();
   const medianRadius = markers.length ? median(markers.map((m) => m.radius)) : 0;
-  const ctx: ResolveContext = { model: colorModel, clusters, settings, medianRadius };
+  const ctx: ResolveContext = { settings, medianRadius };
   for (const i of shapes.unreadable) resolveMarker(markers[i], ctx);
   timings.resolving = now() - t;
   report('resolving', 1);
@@ -354,22 +328,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   // ---- Stage 9: global consistency -----------------------------------------
   report('verifying', 0);
   t = now();
-  const disagreements = markers.filter(
-    (m) =>
-      m.ocrPrediction != null &&
-      m.colorPrediction != null &&
-      m.ocrPrediction !== m.colorPrediction &&
-      (m.colorConfidence ?? 0) > 0.5,
-  ).length;
-  // Colour may not overturn a shape group, so every colour group counts as
-  // ambiguous here; this pass now only prunes values the image does not use.
-  const consistency = enforceGlobalConsistency(
-    markers,
-    active,
-    clusters,
-    new Set(clusters.clusters.map((c) => c.index)),
-  );
-  const colorRescued = markers.filter((m) => m.classificationMethod === 'color').length;
+  const consistency = enforceGlobalConsistency(markers, active);
   const possibleMissed = findPossibleMissed(detection.nearMisses, markers);
   timings.verifying = now() - t;
   report('verifying', 1);
@@ -382,7 +341,6 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
     markers,
     possibleMissed,
     discarded,
-    colorModel,
     settings,
     stats: {
       candidatesProposed: detection.proposed,
@@ -395,9 +353,6 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       imageHeight: original.height,
       ocrEngine: choice.warning ? `${choice.engine} (fallback)` : choice.engine,
       ocrConfidenceHistogram: histogram,
-      colorClusters: clusters.clusters,
-      ocrColorDisagreements: disagreements,
-      colorRescued,
       activeNumbers: active.numbers,
       activeNumbersSource: active.source,
       outOfVocabularyReadings: consistency.outOfVocabulary,
@@ -417,39 +372,53 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
 }
 
 /**
- * Re-learn colours and re-resolve using the corrections the user has made.
+ * Re-apply the user's corrections across the image.
  *
- * Cheap (no pixels are touched) and surprisingly effective: a few manual fixes
- * sharpen the learned colour model, which in turn settles other uncertain
- * markers that share those colours.
+ * With classification driven by digit shape, a correction is worth propagating:
+ * relabelling one marker tells us what its whole shape group is. This re-derives
+ * the number set from the corrected labels and re-decides anything still
+ * unresolved. No pixels are touched, so it is instant.
  */
 export function refineWithCorrections(result: AnalysisResult): AnalysisResult {
-  const markers = result.markers;
-  const teaching = markers.map((m) => ({
-    ...m,
-    ocrPrediction: m.manualNumber ?? m.ocrPrediction ?? null,
-    ocrConfidence: m.manualNumber != null ? 1 : (m.ocrConfidence ?? 0),
-  }));
-  const colorModel = learnColorModel(teaching);
-  const clusters = clusterRingColors(markers);
-  markers.forEach((m, i) => {
-    m.colorCluster = clusters.assignment[i];
-  });
-  assignClusterNumbers(teaching, clusters);
+  const markers = result.markers.map((m) => ({ ...m }));
+
+  // A manual correction speaks for its whole shape group.
+  const corrected = new Map<number, number>();
+  for (const m of markers) {
+    if (m.manualNumber == null || m.shapeGroup == null || m.shapeGroup < 0) continue;
+    corrected.set(m.shapeGroup, m.manualNumber);
+  }
+  const shapeGroups = result.stats.shapeGroups.map((g) =>
+    corrected.has(g.index) ? { ...g, number: corrected.get(g.index)!, confidence: 1 } : g,
+  );
+  for (const m of markers) {
+    if (m.manualNumber != null || m.rejected) continue;
+    if (m.shapeGroup == null || m.shapeGroup < 0) continue;
+    const group = shapeGroups.find((g) => g.index === m.shapeGroup);
+    if (!group || group.number === null) continue;
+    if (m.finalNumber === group.number) continue;
+    m.finalNumber = group.number;
+    m.classificationMethod = 'group';
+    m.needsReview = false;
+    m.finalConfidence = 'high';
+    m.finalScore = 1;
+    m.reason = `Counted as ${group.number} from your correction to this digit group.`;
+  }
+
+  const active = activeNumbersFromShapes(shapeGroups, markers.length, result.settings.allowedNumbers);
   const medianRadius = markers.length ? median(markers.map((m) => m.radius)) : 0;
-  const ctx: ResolveContext = { model: colorModel, clusters, settings: result.settings, medianRadius };
-  for (const m of markers) resolveMarker(m, ctx);
-  const active = inferActiveNumbers(teaching, clusters, {
-    ...DEFAULT_INFER,
-    userSet: result.settings.allowedNumbers,
-  });
-  const consistency = enforceGlobalConsistency(markers, active, clusters);
+  const ctx: ResolveContext = { settings: result.settings, medianRadius };
+  for (const m of markers) {
+    if (m.finalNumber == null && !m.rejected && m.manualNumber == null) resolveMarker(m, ctx);
+  }
+  const consistency = enforceGlobalConsistency(markers, active);
+
   return {
     ...result,
-    colorModel,
+    markers,
     stats: {
       ...result.stats,
-      colorClusters: clusters.clusters,
+      shapeGroups,
       activeNumbers: active.numbers,
       activeNumbersSource: active.source,
       outOfVocabularyReadings: consistency.outOfVocabulary,
@@ -461,9 +430,9 @@ export function refineWithCorrections(result: AnalysisResult): AnalysisResult {
 /**
  * Fraction of a sample of candidates that contain an isolatable digit.
  *
- * Sampled rather than exhaustive: cropping every candidate at several
- * strictness settings would cost more than the rest of the pipeline, and a
- * couple of hundred is plenty to tell a good setting from a bad one.
+ * Sampled rather than exhaustive: cropping every candidate at several strictness
+ * settings would cost more than the rest of the pipeline, and a couple of
+ * hundred is plenty to tell a good setting from a bad one.
  */
 function glyphYield(original: RgbaImage, candidates: MarkerCandidate[], sample = 160): number {
   if (candidates.length === 0) return 0;

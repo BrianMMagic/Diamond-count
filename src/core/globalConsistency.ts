@@ -1,5 +1,4 @@
 import { median } from './cv/threshold.ts';
-import type { ClusterResult } from './colorClusterer.ts';
 import type { MarkerDetection, ShapeGroup } from './types.ts';
 
 export interface ActiveNumbers {
@@ -38,7 +37,6 @@ export const DEFAULT_INFER: InferOptions = {
  */
 export function inferActiveNumbers(
   markers: MarkerDetection[],
-  clusters: ClusterResult,
   opts: InferOptions = DEFAULT_INFER,
 ): ActiveNumbers {
   if (opts.userSet && opts.userSet.length > 0) {
@@ -58,13 +56,6 @@ export function inferActiveNumbers(
   const active = new Set<number>();
   for (const [number, count] of votes) {
     if (count >= threshold) active.add(number);
-  }
-
-  // A number that owns a real colour group is real even if the digits are hard
-  // to read — that is the whole point of having a second source of evidence.
-  for (const cluster of clusters.clusters) {
-    if (cluster.assignedNumber === null) continue;
-    if (cluster.size >= threshold && cluster.purity >= 0.6) active.add(cluster.assignedNumber);
   }
 
   // Never return nothing: fall back to whatever was most often read.
@@ -111,120 +102,56 @@ export function activeNumbersFromShapes(
 export interface ConsistencyResult {
   /** Readings thrown out for naming a number the image does not contain. */
   outOfVocabulary: number;
-  /** Markers whose value was CHANGED by their colour group. */
+  /** Retained for the stats shape; nothing corrects by colour any more. */
   clusterCorrected: number;
 }
 
 /**
- * Force every marker into the active number set, and let strong colour groups
- * correct — not merely flag — the markers that disagree with them.
+ * Force every marker into the active number set.
  *
- * The earlier version only demoted a disagreeing marker to "needs review". With
- * a handful of markers that is reasonable; with seven hundred it just moves the
- * work onto the user. When a colour group is large, pure, and the marker sits
- * squarely inside it, the group is better evidence than one blurry digit, so it
- * wins outright. A confident, well-formed reading still survives — it is flagged
- * for review instead, which is the case the spec singles out.
+ * A value the image does not contain cannot stand, however confident the
+ * reading looked. Markers naming one fall back to the best remaining candidate
+ * from the same reading, or are reported as unknown — never guessed from
+ * anything else about the marker.
  */
 export function enforceGlobalConsistency(
   markers: MarkerDetection[],
   active: ActiveNumbers,
-  clusters: ClusterResult,
-  /**
-   * Groups the group classifier could not label, because their readings split
-   * across two numbers. Their members were deliberately read individually, so
-   * this pass must not hand them back to the group -- doing so silently undoes
-   * the fallback and reinstates the very error it exists to prevent.
-   */
-  ambiguousGroups: Set<number> = new Set(),
 ): ConsistencyResult {
   const allowed = new Set(active.numbers);
   let outOfVocabulary = 0;
-  let clusterCorrected = 0;
 
   for (const marker of markers) {
     if (marker.manualNumber != null || marker.rejected) continue;
+    if (marker.finalNumber == null || allowed.has(marker.finalNumber)) continue;
 
-    const cluster = marker.colorCluster != null && marker.colorCluster >= 0
-      ? clusters.clusters[marker.colorCluster]
-      : undefined;
-    const clusterNumber =
-      cluster && cluster.assignedNumber !== null && allowed.has(cluster.assignedNumber)
-        ? cluster.assignedNumber
-        : null;
-    const clusterTrusted =
-      clusterNumber !== null &&
-      cluster !== undefined &&
-      cluster.size >= 10 &&
-      cluster.purity >= 0.85 &&
-      !ambiguousGroups.has(cluster.index);
-
-    // 1. A value the image does not contain cannot stand.
-    if (marker.finalNumber != null && !allowed.has(marker.finalNumber)) {
-      outOfVocabulary++;
-      const fallback = pickFallback(marker, allowed, clusterNumber);
-      if (fallback != null) {
-        marker.finalNumber = fallback;
-        marker.classificationMethod = fallback === clusterNumber ? 'color' : 'ocr';
-        marker.reason =
-          `Read as ${marker.ocrPrediction}, which this image does not use; ` +
-          `re-read as ${fallback} from the remaining candidates.`;
-        marker.finalConfidence = clusterTrusted && fallback === clusterNumber ? 'medium' : 'review';
-        marker.finalScore = Math.min(marker.finalScore ?? 0.5, clusterTrusted ? 0.6 : 0.45);
-        marker.needsReview = marker.finalConfidence === 'review';
-      } else {
-        marker.finalNumber = null;
-        marker.classificationMethod = 'unknown';
-        marker.finalConfidence = 'review';
-        marker.finalScore = 0;
-        marker.needsReview = true;
-        marker.reason = `Read as ${marker.ocrPrediction}, which this image does not use, and nothing else fitted.`;
-      }
-      continue;
-    }
-
-    // 2. A large, pure colour group outvotes an unconvincing digit.
-    if (!clusterTrusted || clusterNumber === null) continue;
-    if (marker.finalNumber === clusterNumber) continue;
-
-    const ocrConfidence = marker.ocrConfidence ?? 0;
-    const wellRead = ocrConfidence >= 0.85 && marker.finalConfidence === 'high';
-    if (wellRead) {
-      // Case D from the spec: never silently overrule a confident reading.
-      marker.finalConfidence = 'review';
-      marker.needsReview = true;
-      marker.finalScore = Math.min(marker.finalScore ?? 0.5, 0.5);
+    outOfVocabulary++;
+    const fallback = pickFallback(marker, allowed);
+    if (fallback != null) {
+      marker.finalNumber = fallback;
+      marker.classificationMethod = 'ocr';
       marker.reason =
-        `${marker.reason ?? ''} Its ring colour matches ${cluster.size} markers counted as ${clusterNumber}.`.trim();
-      continue;
+        `Read as ${marker.ocrPrediction}, which this image does not use; ` +
+        `re-read as ${fallback} from the remaining candidates.`;
+      marker.finalConfidence = 'review';
+      marker.finalScore = Math.min(marker.finalScore ?? 0.5, 0.45);
+      marker.needsReview = true;
+    } else {
+      marker.finalNumber = null;
+      marker.classificationMethod = 'unknown';
+      marker.finalConfidence = 'review';
+      marker.finalScore = 0;
+      marker.needsReview = true;
+      marker.reason = `Read as ${marker.ocrPrediction}, which this image does not use, and nothing else fitted.`;
     }
-
-    marker.finalNumber = clusterNumber;
-    marker.classificationMethod = 'color';
-    marker.finalScore = Math.max(marker.finalScore ?? 0, 0.7);
-    marker.finalConfidence = 'medium';
-    marker.needsReview = false;
-    marker.reason =
-      `The digit was unconvincing (${Math.round(ocrConfidence * 100)}%); its ring colour matches ` +
-      `${cluster.size} markers counted as ${clusterNumber}, so it was counted as ${clusterNumber}.`;
-    clusterCorrected++;
   }
 
-  return { outOfVocabulary, clusterCorrected };
+  return { outOfVocabulary, clusterCorrected: 0 };
 }
 
 /** Best remaining hypothesis for a marker whose reading was out of vocabulary. */
-function pickFallback(
-  marker: MarkerDetection,
-  allowed: Set<number>,
-  clusterNumber: number | null,
-): number | null {
-  const ranked = marker.ocrRanked ?? [];
-  const best = ranked.find((r) => allowed.has(r.value));
-  // Prefer a colour group over a weak runner-up digit.
-  if (clusterNumber !== null && (!best || best.score < 0.45)) return clusterNumber;
-  if (best) return best.value;
-  return clusterNumber;
+function pickFallback(marker: MarkerDetection, allowed: Set<number>): number | null {
+  return (marker.ocrRanked ?? []).find((r) => allowed.has(r.value))?.value ?? null;
 }
 
 /**

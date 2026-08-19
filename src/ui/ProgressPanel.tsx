@@ -9,8 +9,8 @@ const STEPS: Array<{ stage: PipelineStage; label: string }> = [
   { stage: 'preparing', label: 'Preparing image' },
   { stage: 'detecting', label: 'Detecting markers' },
   { stage: 'cropping', label: 'Extracting markers' },
+  { stage: 'clustering', label: 'Grouping matching digits' },
   { stage: 'reading', label: 'Reading numbers' },
-  { stage: 'colors', label: 'Analysing marker colours' },
   { stage: 'resolving', label: 'Verifying detections' },
   { stage: 'counting', label: 'Counting' },
 ];
@@ -21,7 +21,6 @@ const ORDER: PipelineStage[] = [
   'deduplicating',
   'cropping',
   'reading',
-  'colors',
   'clustering',
   'resolving',
   'verifying',

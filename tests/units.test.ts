@@ -2,14 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { deduplicate } from '../src/core/markerDeduplicator.ts';
 import type { MarkerCandidate, MarkerDetection } from '../src/core/types.ts';
 import { countMarkers, countRows, formatCounts } from '../src/core/resultCounter.ts';
-import { deltaE94, labToRgb, rgbToHsv, rgbToLab } from '../src/core/cv/color.ts';
 import { connectedComponents } from '../src/core/cv/connected.ts';
 import { otsuThreshold } from '../src/core/cv/threshold.ts';
 import { getDigitTemplates } from '../src/core/classifier/digitFont.ts';
 import { GLYPH_SIZE } from '../src/core/markerCropper.ts';
 import { scoreGlyph } from '../src/core/classifier/templateClassifier.ts';
 import { interpret } from '../src/core/classifier/tesseractClassifier.ts';
-import { learnColorModel, predictFromColor } from '../src/core/colorAnalyzer.ts';
 import { evaluate } from '../src/testing/groundTruth.ts';
 
 function candidate(id: string, x: number, y: number, r = 10, score = 0.8): MarkerCandidate {
@@ -43,83 +41,6 @@ describe('deduplication', () => {
     const result = deduplicate([a, b]);
     expect(result.markers).toHaveLength(1);
     expect(result.markers[0].detectionScore).toBeGreaterThan(0.6);
-  });
-});
-
-describe('colour maths', () => {
-  it('round-trips Lab and sRGB closely enough to paint swatches', () => {
-    for (const rgb of [
-      [230, 120, 40],
-      [20, 20, 22],
-      [244, 241, 234],
-      [40, 150, 160],
-    ] as Array<[number, number, number]>) {
-      const back = labToRgb(rgbToLab(...rgb));
-      for (let c = 0; c < 3; c++) expect(Math.abs(back[c] - rgb[c])).toBeLessThanOrEqual(2);
-    }
-  });
-
-  it('reports orange and red as closer than orange and black', () => {
-    const orange = rgbToLab(226, 138, 44);
-    const red = rgbToLab(206, 74, 60);
-    const black = rgbToLab(26, 26, 28);
-    expect(deltaE94(orange, red)).toBeLessThan(deltaE94(orange, black));
-  });
-
-  it('computes hue for a saturated ring', () => {
-    const [h, s, v] = rgbToHsv(226, 138, 44);
-    expect(h).toBeGreaterThan(20);
-    expect(h).toBeLessThan(40);
-    expect(s).toBeGreaterThan(0.7);
-    expect(v).toBeGreaterThan(0.8);
-  });
-});
-
-describe('colour learning', () => {
-  const makeMarker = (
-    id: string,
-    number: number,
-    rgb: [number, number, number],
-    confidence: number,
-  ): MarkerDetection => ({
-    ...candidate(id, 0, 0),
-    ocrPrediction: number,
-    ocrConfidence: confidence,
-    ringColor: {
-      r: rgb[0],
-      g: rgb[1],
-      b: rgb[2],
-      h: 0,
-      s: 0,
-      v: 0,
-      lab: rgbToLab(...rgb),
-      spread: 2,
-      samples: 100,
-    },
-    finalConfidence: 'review',
-    classificationMethod: 'unknown',
-  });
-
-  it('learns colours only from confident readings and rescues an unread marker', () => {
-    const markers: MarkerDetection[] = [];
-    for (let i = 0; i < 8; i++) markers.push(makeMarker(`o${i}`, 3, [226, 138, 44], 0.95));
-    for (let i = 0; i < 8; i++) markers.push(makeMarker(`k${i}`, 2, [26, 26, 28], 0.95));
-    // A low-confidence marker must not teach anything.
-    markers.push(makeMarker('bad', 7, [226, 138, 44], 0.2));
-
-    const model = learnColorModel(markers);
-    expect(model.entries.map((e) => e.number).sort()).toEqual([2, 3]);
-
-    const unread = makeMarker('x', 0, [224, 141, 48], 0);
-    const prediction = predictFromColor(model, unread.ringColor);
-    expect(prediction.number).toBe(3);
-    expect(prediction.confidence).toBeGreaterThan(0.5);
-  });
-
-  it('returns nothing when no colours could be learned', () => {
-    const model = learnColorModel([]);
-    expect(model.trained).toBe(false);
-    expect(predictFromColor(model, undefined).number).toBeNull();
   });
 });
 

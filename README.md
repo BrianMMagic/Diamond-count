@@ -168,12 +168,6 @@ digits never came closer than 0.85, so the boundary sits in that gap. Prototypes
 are then compared far more strictly than raw glyphs and near-identical piles are
 merged, which repairs over-splitting on a noisy photograph.
 
-**Colour does not get a vote.** One mislabelled colour group is hundreds of wrong
-markers at once — the failure mode is catastrophic rather than gradual, which is
-a bad trade when the job is counting. Ring colour is still measured, for the
-debug view and for markers whose digit could not be isolated at all, and
-`useColorAssist` turns it back on; it is off by default.
-
 The results screen shows each distinct digit as its averaged picture. Correcting
 one label settles every marker in that group.
 
@@ -208,25 +202,19 @@ disagreement reliably flags a marker for a human. If Tesseract cannot load
 (offline, blocked CDN, unsupported browser) the app degrades to the built-in
 reader rather than to an error screen, and says so in the debug panel.
 
-### 7. Colour analysis — `core/colorAnalyzer.ts`, `core/colorClusterer.ts`
+### 7. Colour is not used
 
-Nothing about colour is hard-coded. **The number → colour mapping is learned from
-each uploaded image**, so a kit where 3 is orange and one where 3 is teal both
-work.
+Marker colour was tried as a second opinion and has been **removed entirely** —
+not disabled behind a flag, removed. Its failure mode is catastrophic rather than
+gradual: one mislabelled colour group is hundreds of wrong markers at once, which
+is the wrong trade when the job is counting. Taking it out changed the counts on
+the reference card by nothing at all (915 of 965, before and after), so it was
+costing time and risk while contributing no accuracy.
 
-Sampling walks 48 spokes and locks onto where the ring actually is, then takes
-the **median** across spokes — a fixed annulus mixes in the white centre when the
-radius is slightly off, and a mean would be dragged by one spoke crossing the
-digit or a glare highlight. Colours are compared in CIE L\*a\*b\* with **CIE94**
-distance, whose chroma weighting reflects that a red and an orange ring are easy
-to tell apart by eye even though CIE76 calls them close.
-
-Markers whose digit was read confidently teach the model; outliers are trimmed
-before the centroid is taken. Separately, all ring colours are **clustered**
-(deterministic k-means++, k chosen by silhouette over 1..10) — the spec is
-explicit that ten colours must not be assumed, and an image using four numbers
-produces four clusters. Clusters are then mapped to numbers by majority vote of
-confident readings.
+Nothing in the pipeline reads colour now. The image is converted to grayscale
+during preparation and every later stage works from that; markers are identified
+by the shape of the digit printed on them, and a marker whose digit cannot be
+read is reported as unknown rather than guessed from what colour it is.
 
 ### 8. Global consistency — `core/globalConsistency.ts`
 
