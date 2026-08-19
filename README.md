@@ -80,6 +80,14 @@ synthetic test from 27% to 80%.
 roughly the right size. Completely independent of the gradient statistics, so
 the two generators fail in different ways.
 
+**Marker size is measured, not guessed.** The scale sweep scores each radius by
+its peak response weighted by how many of those peaks survive verification — a
+glossy bead's specular highlight is a small bright radially-symmetric blob and
+answers ferociously at tiny radii, which once collapsed a 17px marker to 3px and
+produced two thousand detections. The estimate is then only accurate to within a
+fifth or so, and the detector is sharply sensitive to it, so detection iterates:
+detect, measure what was found, re-run at that size, until the radius settles.
+
 **The verifier** (`measureProfile`) walks 36 spokes outwards from each candidate
 and scores what it finds: a light centre, a dark region inside it (the printed
 digit), a closed ring at a consistent radius, and a surround that differs from
@@ -375,6 +383,11 @@ that are ever looked at.
 
 ## Known limits
 
+- Metallic and pearl beads are the hard case, because their ring is nearly the
+  same tone as their own face. Several thresholds were originally scaled off the
+  *digit's* contrast, which is always high, and that quietly rejected every such
+  bead — a real card reported **zero 3s** while being covered in gold ones. Those
+  thresholds now scale off the natural variation of the marker's own face.
 - Recall is weakest on **pale rings against pale paper with no shadow** — the
   synthetic worst case sits around 80%. Real photographs of physical beads have
   edge shadows and do better, but this is the first thing to check against your

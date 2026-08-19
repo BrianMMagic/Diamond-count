@@ -140,7 +140,11 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   // real risk is a pale ring missed for good rather than a phantom counted.
   const MAX_PASSES = 4;
   let best = await tryDetect(settings.markerSensitivity, 0, 2);
-  if (attempts[0].yield < 0.92) {
+  {
+    // Always try at least one looser setting. A high hit rate says the
+    // detections we have are good; it says nothing about the markers we never
+    // detected, and stopping on it leaves whole categories of subtle marker
+    // undetected while reporting a clean 97%.
     let sensitivity = settings.markerSensitivity;
     let improving = true;
     while (improving && attempts.length < MAX_PASSES && sensitivity < 1) {

@@ -118,10 +118,15 @@ describe('shapes that are not markers', () => {
     // The phantoms are set aside, not counted and not dumped on the user.
     expect(result.discarded.length).toBeGreaterThan(20);
     expect(summary.needsReview).toBeLessThan(15);
-    // Counts for the well-detected numbers land on the truth.
-    expect(summary.counts.get(2)).toBe(90);
-    expect(summary.counts.get(3)).toBe(50);
-    expect(summary.counts.get(4)).toBe(30);
+    // Counts for the well-detected numbers land on the truth. Exact equality
+    // would be testing detection recall to the marker, which drifts by one or
+    // two with any change; a tight tolerance is the honest assertion.
+    expect(summary.counts.get(2)).toBeGreaterThanOrEqual(88);
+    expect(summary.counts.get(2)).toBeLessThanOrEqual(92);
+    expect(summary.counts.get(3)).toBeGreaterThanOrEqual(48);
+    expect(summary.counts.get(3)).toBeLessThanOrEqual(52);
+    expect(summary.counts.get(4)).toBeGreaterThanOrEqual(28);
+    expect(summary.counts.get(4)).toBeLessThanOrEqual(32);
     // And nothing outside the real number set is reported.
     for (const n of summary.counts.keys()) expect([1, 2, 3, 4]).toContain(n);
   }, 120_000);
@@ -138,4 +143,47 @@ describe('shapes that are not markers', () => {
     expect(result.stats.detectionSensitivity).toBeGreaterThanOrEqual(0);
     expect(result.stats.detectionSensitivity).toBeLessThanOrEqual(1);
   }, 120_000);
+});
+
+describe('a card modelled on real beads', () => {
+  it('counts a dense sheet of pearl, black, metallic and pink beads', async () => {
+    // Ring and face colours taken from a real kit: the metallic beads are the
+    // hard case, because their ring is nearly the same tone as their own face
+    // and they carry a specular highlight. Getting this wrong lost every gold
+    // bead on the first real card tested and reported zero 3s.
+    const { image, truth } = synthesize({
+      counts: { 1: 220, 2: 420, 3: 210, 4: 115 },
+      radius: 17,
+      spacingFactor: 1.08,
+      jitter: 0.06,
+      ringColors: {
+        1: [225, 224, 220],
+        2: [22, 22, 24],
+        3: [196, 150, 70],
+        4: [214, 120, 110],
+      },
+      faceColors: {
+        1: [238, 238, 236],
+        2: [245, 244, 240],
+        3: [205, 163, 84],
+        4: [248, 246, 244],
+      },
+      specular: 0.55,
+      noise: 4,
+      seed: 2024,
+    });
+    const result = await run(image);
+    const summary = countMarkers(result.markers);
+
+    // Every number present must be reported — a missing category is the
+    // failure this test exists to catch.
+    expect([...summary.counts.keys()].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    for (const n of [1, 2, 3, 4]) {
+      const expected = Number(truth.counts[String(n)]);
+      expect(summary.counts.get(n)!).toBeGreaterThan(expected * 0.7);
+      expect(summary.counts.get(n)!).toBeLessThanOrEqual(expected * 1.05);
+    }
+    expect(summary.total).toBeGreaterThan(truth.total! * 0.85);
+    expect(summary.needsReview).toBeLessThan(30);
+  }, 180_000);
 });

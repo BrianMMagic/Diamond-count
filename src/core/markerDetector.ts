@@ -50,7 +50,7 @@ export function estimateMarkerRadius(prepared: PreparedImage): { radius: number;
   const gradientThreshold = gradientThresholdFor(grad.mag);
 
   const scores: Array<{ radius: number; score: number }> = [];
-  let best = { radius: 6, score: -Infinity };
+  const sampled: Array<{ n: number; fraction: number; peaks: number; estimated: number }> = [];
   for (const n of [2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 17, 20, 24, 28]) {
     if (n * 8 > Math.min(small.width, small.height)) break;
     const map = fastRadialSymmetry(grad, [n], {
@@ -58,18 +58,53 @@ export function estimateMarkerRadius(prepared: PreparedImage): { radius: number;
       alpha: 2,
       magnitudeCap: gradientThreshold * 2,
     });
-    const peaks = findPeaks(map, Math.max(2, n), floatPercentile(map.data, 0.995), 400);
+    const peaks = findPeaks(map, Math.max(2, n), floatPercentile(map.data, 0.995), 4000);
     if (peaks.length < 4) {
       scores.push({ radius: n / scale, score: 0 });
       continue;
     }
+    // Score a scale by what FRACTION of its peaks survive verification, not by
+    // raw response: a glossy bead's specular highlight is a small bright
+    // radially-symmetric blob and answers ferociously at tiny radii.
+    // Sample ACROSS the peak list, not just its head: the strongest peaks
+    // verify at almost any scale, so judging by them alone makes every scale
+    // look equally good and the choice falls to whichever happens to be first.
+    const stride = Math.max(1, Math.floor(peaks.length / 80));
+    let probed = 0;
+    let verified = 0;
+    for (let i = 0; i < peaks.length; i += stride) {
+      probed++;
+      if (measureProfile(small, peaks[i].x, peaks[i].y, n / 0.9).score >= 0.5) verified++;
+    }
+    const fraction = probed ? verified / probed : 0;
+    // Mean response of the strongest peaks, normalised for circumference so a
+    // larger circle does not win merely by having more edge pixels voting --
+    // then weighted by how many peaks actually verify. The response alone peaks
+    // at the right scale but also answers strongly to a glossy bead's specular
+    // highlight; the verification weight is what tells those apart, since a
+    // highlight has no ring, no digit and no surround.
     const top = peaks.slice(0, 200);
-    const mean = top.reduce((s, p) => s + p.score, 0) / top.length;
-    // Normalise for circumference so large radii do not automatically win.
-    const score = mean / n;
-    scores.push({ radius: n / scale, score });
-    if (score > best.score) best = { radius: n, score };
+    const response = top.reduce((sum, p) => sum + p.score, 0) / top.length / n;
+    const estimated = response * fraction;
+    sampled.push({ n, fraction, peaks: peaks.length, estimated });
+    scores.push({ radius: n / scale, score: estimated });
   }
+
+  // Prefer the LARGEST scale that still verifies well.
+  //
+  // Fractions saturate: the interior of a marker is full of features that look
+  // convincing when examined at their own small scale, so several scales score
+  // near the top and a plain maximum breaks the tie towards the smallest --
+  // which is how a 17px marker came out as 3px and produced two thousand
+  // detections. A marker contains sub-features; a sub-feature does not contain
+  // markers, so among comparable scores the biggest one is the marker.
+  // Among comparable scales prefer the largest: a marker contains sub-features,
+  // a sub-feature does not contain markers, so ties resolve upwards.
+  const bestEstimate = sampled.reduce((m, c) => Math.max(m, c.estimated), 0);
+  const acceptable = sampled.filter((c) => c.estimated >= bestEstimate * 0.9 && c.fraction > 0.4);
+  const best = acceptable.length
+    ? { radius: acceptable[acceptable.length - 1].n }
+    : { radius: sampled.length ? sampled[sampled.length - 1].n : 6 };
   // The transform's radius approximates the ring's INNER edge distance; the
   // ring itself sits a little further out.
   const ringRadius = (best.radius / scale) / 0.9;
@@ -80,8 +115,14 @@ function gradientThresholdFor(mag: Float32Array): number {
   // Keep a generous share of edges. A high percentile silently discards pale
   // rings (a cream marker on cream paper) because the strong dark rings own the
   // top of the distribution, so the floor does the noise rejection instead.
+  //
+  // The cap matters more than the percentile. On a sheet mixing black beads with
+  // pearl and metallic ones, the black beads own the top of the gradient
+  // distribution and a percentile-derived threshold silently excludes every
+  // subtle ring from voting at all. Vote magnitudes are capped elsewhere, so
+  // admitting weak edges costs precision far less than it buys recall.
   const t = floatPercentile(mag, 0.8);
-  return Math.max(10, Math.min(t, 45));
+  return Math.max(8, Math.min(t, 20));
 }
 
 /**
@@ -107,9 +148,19 @@ export function measureProfile(
   const centerBright = percentile(inner, 0.85);
   const centerDark = percentile(inner, 0.12);
 
-  // Threshold for "this angle has a ring": scale with how much contrast the
-  // marker itself shows, so pale rings are not written off in bright images.
-  const devThreshold = Math.max(9, (centerBright - centerDark) * 0.35, 14);
+  // How much does a ring have to differ from the face to count as a ring?
+  //
+  // Not a share of the DIGIT's contrast, which was the mistake: the digit is
+  // dark ink and always high-contrast, so scaling by it demanded a strongly
+  // contrasting ring and silently rejected every bead whose ring is close in
+  // tone to its own face -- metallic gold and pearl beads especially, which is
+  // how two whole categories went missing on the first real card.
+  //
+  // The right reference is the natural variation of the face itself: a ring that
+  // stands several times clear of the face's own noise is a ring, however subtle
+  // it looks next to the ink.
+  const faceSpread = Math.max(1, percentile(inner, 0.85) - percentile(inner, 0.55));
+  const devThreshold = Math.max(7, faceSpread * 3);
 
   const hitRadii: number[] = [];
   const hitPts: Array<[number, number]> = [];
@@ -201,9 +252,11 @@ export function measureProfile(
     aspect,
   };
 
-  const ringContrast = Math.min(1, Math.abs(centerBright - ringLevel) / 70);
+  // These scales adapt too, for the same reason: a fixed 70-grey-level yardstick
+  // scores a perfectly good pearl marker as though it had almost no ring.
+  const ringContrast = Math.min(1, Math.abs(centerBright - ringLevel) / Math.max(18, faceSpread * 8));
   const digitPresence = Math.min(1, (centerBright - centerDark) / 70);
-  const ringVsSurround = Math.min(1, Math.abs(ringLevel - surroundMean) / 45);
+  const ringVsSurround = Math.min(1, Math.abs(ringLevel - surroundMean) / Math.max(14, faceSpread * 6));
   const aspectScore = Math.max(0, 1 - (aspect - 1) / 1.1);
 
   const score =
@@ -297,20 +350,25 @@ export function detectMarkers(prepared: PreparedImage, opts: DetectOptions): Det
   }
   radius = Math.max(3, Math.min(radius, Math.min(prepared.working.width, prepared.working.height) / 6));
 
+  // Iterate: detect, measure what was actually found, detect again at that size.
+  //
+  // The scale estimate is only accurate to within a fifth or so -- the response
+  // peaks a little inside the ring, and by an amount that depends on how the
+  // bead is printed -- while the detector is sharply sensitive to being given
+  // the wrong radius. Measuring the markers it did find and re-running closes
+  // that gap without needing the initial estimate to be right.
   let pass = runPass(prepared, radius, opts);
-  report(0.6, `${pass.accepted.length} markers found`);
-
-  // Second pass at the measured radius, when the estimate was materially off.
-  if (pass.accepted.length >= 8) {
+  for (let iteration = 0; iteration < 3; iteration++) {
+    if (pass.accepted.length < 8) break;
     const measured = median(pass.accepted.map((c) => c.radius * prepared.scale));
-    if (measured > 1 && Math.abs(measured - radius) / radius > 0.15) {
-      report(0.65, 'Re-running detection at the measured marker size');
-      const second = runPass(prepared, measured, opts);
-      if (second.accepted.length >= pass.accepted.length * 0.9) {
-        pass = second;
-        radius = measured;
-      }
-    }
+    if (!(measured > 1) || Math.abs(measured - radius) / radius <= 0.08) break;
+    report(0.65 + 0.1 * iteration, `Re-running at the measured marker size`);
+    const next = runPass(prepared, measured, opts);
+    // Accept the correction when it holds up; a better radius may legitimately
+    // find a somewhat different number of markers.
+    if (next.accepted.length < pass.accepted.length * 0.8) break;
+    pass = next;
+    radius = measured;
   }
   report(0.95, `${pass.accepted.length} markers found`);
   return { ...pass, radius };
@@ -375,8 +433,16 @@ export function filterBySizeConsistency(markers: MarkerCandidate[]): {
   const radii = markers.map((m) => m.radius);
   const med = median(radii);
   const mad = median(radii.map((r) => Math.abs(r - med))) || med * 0.1;
-  const lo = Math.max(med - 4 * mad, med * 0.55);
-  const hi = Math.min(med + 4 * mad, med * 1.75);
+  // The deviation may only WIDEN the band, never tighten it.
+  //
+  // When most markers agree closely the deviation collapses to a fraction of a
+  // pixel, and a band of median +/- 4 deviations becomes razor thin. Markers
+  // whose ring is subtle measure a little larger -- the profile locks onto the
+  // bead's outer edge instead of its inner ring -- and a whole category ends up
+  // culled for being 20% out. This filter exists to drop things that are
+  // obviously the wrong size, not to enforce uniformity.
+  const lo = Math.max(Math.min(med * 0.7, med - 4 * mad), med * 0.5);
+  const hi = Math.min(Math.max(med * 1.45, med + 4 * mad), med * 2);
   const kept: MarkerCandidate[] = [];
   const dropped: MarkerCandidate[] = [];
   for (const m of markers) (m.radius >= lo && m.radius <= hi ? kept : dropped).push(m);

@@ -19,6 +19,21 @@ export interface SynthOptions {
   /** How many markers of each number to place, in placement order. */
   counts: Record<number, number>;
   ringColors?: Record<number, [number, number, number]>;
+  /**
+   * Colour of each marker's FACE (the disc the digit is printed on).
+   *
+   * Defaults to near-white. Real kits use metallic and coloured beads whose face
+   * is a mid-tone, which changes the contrast the digit has to be found against.
+   */
+  faceColors?: Record<number, [number, number, number]>;
+  /**
+   * Strength of a specular highlight on each bead, 0..1.
+   *
+   * Shiny beads catch the light in a bright off-centre spot. That is the single
+   * biggest difference between a printed circle and a photographed bead, and it
+   * wrecks any thresholding that assumes the face is evenly lit.
+   */
+  specular?: number;
   background?: [number, number, number];
   /** Gaussian-ish pixel noise amplitude, 0..40. */
   noise?: number;
@@ -89,10 +104,12 @@ export function drawMarker(
   radius: number,
   digit: number,
   ring: [number, number, number],
+  face: [number, number, number] = [246, 245, 242],
+  specular = 0,
 ): void {
   const rOuter = radius * 1.08;
   const rInner = radius * 0.8;
-  const centre: [number, number, number] = [246, 245, 242];
+  const centre = face;
   const ink: [number, number, number] = [24, 24, 26];
 
   const x0 = Math.max(0, Math.floor(cx - rOuter - 2));
@@ -130,6 +147,22 @@ export function drawMarker(
       }
     }
     cursor += size * 0.62;
+  }
+
+  // Specular highlight LAST, so it sits over the digit exactly as it does on a
+  // real bead photographed under a lamp.
+  if (specular > 0) {
+    const hx = cx - radius * 0.3;
+    const hy = cy - radius * 0.35;
+    const hr = radius * 0.5;
+    for (let y = Math.max(0, hy - hr) | 0; y < Math.min(img.height, hy + hr); y++) {
+      for (let x = Math.max(0, hx - hr) | 0; x < Math.min(img.width, hx + hr); x++) {
+        const d = Math.hypot(x - hx, y - hy);
+        if (d > hr) continue;
+        const falloff = (1 - d / hr) ** 2;
+        blend(img, (y * img.width + x) * 4, [255, 253, 245], specular * falloff);
+      }
+    }
   }
 }
 
@@ -184,7 +217,16 @@ export function synthesize(opts: SynthOptions): {
     const x = margin + radius + col * spacing + (rand() - 0.5) * 2 * jitter;
     const y = margin + radius + row * spacing + (rand() - 0.5) * 2 * jitter;
     const r = radius * rj;
-    drawMarker(img, x, y, r, number, ringColors[number] ?? [120, 120, 120]);
+    drawMarker(
+      img,
+      x,
+      y,
+      r,
+      number,
+      ringColors[number] ?? [120, 120, 120],
+      opts.faceColors?.[number] ?? [246, 245, 242],
+      opts.specular ?? 0,
+    );
     markers.push({ x, y, radius: r, number });
   });
 

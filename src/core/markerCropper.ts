@@ -5,6 +5,7 @@ import { autoContrast, unsharp } from './cv/filters.ts';
 import { upscaleGray, downscaleGray } from './cv/resize.ts';
 import { median, otsuThreshold, sauvola } from './cv/threshold.ts';
 import { connectedComponents } from './cv/connected.ts';
+import { close } from './cv/morphology.ts';
 import type { MarkerCandidate } from './types.ts';
 
 /** Side of the normalised crop. Big enough that a 6px printed digit becomes ~40px. */
@@ -12,12 +13,13 @@ export const NORM_SIZE = 192;
 /**
  * Crop side as a multiple of the marker radius.
  *
- * Deliberately generous. The detector's radius estimate can run ~20% small on a
- * busy photograph, and a tight window then clips the very digit we are trying to
- * read -- which surfaces as "OCR failed" on markers that are perfectly legible.
- * A wider window costs a little work and lets the centre be MEASURED instead.
+ * A balance with a hard ceiling. Too tight and a low radius estimate clips the
+ * digit; too wide and, on a sheet where markers nearly touch, the window
+ * swallows the NEIGHBOURING markers and the digit can no longer be picked out at
+ * all. Centre-to-centre spacing is about 2.7 radii on a dense sheet, so the
+ * window must stay under that.
  */
-export const CROP_FACTOR = 3.2;
+export const CROP_FACTOR = 2.7;
 /** Normalised glyph bitmaps handed to the classifier. */
 export const GLYPH_SIZE = 32;
 
@@ -152,11 +154,16 @@ function measureCenterRadius(img: GrayImage, ringRadius: number): number {
     }
   }
   if (hits.length < 12) return fallback;
+  // Spokes must AGREE. When a crop overlaps its neighbours, different spokes
+  // find rings at wildly different distances; taking the median of that finds a
+  // boundary belonging to no marker in particular and the disc ends up covering
+  // several. Consistency is the signal that we found one marker's own ring.
+  const rough = median(hits);
+  const consistent = hits.filter((r) => Math.abs(r - rough) <= rough * 0.2);
+  if (consistent.length < 12) return fallback;
   // Stop just short of the ring edge we found.
-  const measured = median(hits) * 0.9;
-  // Wide bounds, because the point is to tolerate a poor radius estimate; only a
-  // measurement that is frankly impossible falls back.
-  return Math.max(ringRadius * 0.3, Math.min(ringRadius * 1.25, measured));
+  const measured = median(consistent) * 0.9;
+  return Math.max(ringRadius * 0.4, Math.min(ringRadius * 0.85, measured));
 }
 
 /**
@@ -190,6 +197,48 @@ function binarizeDisc(img: GrayImage, radius: number): GrayImage {
  * left to right, which is what makes a two-glyph "1" + "0" readable as ten.
  */
 export function isolateGlyphs(img: GrayImage, innerRadius: number): Glyph[] {
+  // No single disc size suits every bead. A pearl bead has a bright face inside
+  // a pale ring; a metallic one has a ring almost the same tone as its face, so
+  // a disc that clips even slightly into the ring wrecks the threshold and the
+  // digit is lost. Rather than hunt for a constant that satisfies all of them --
+  // which is what silently dropped every gold bead on the first real card --
+  // try several and keep whichever actually yields a plausible digit.
+  const ringRadius = innerRadius / 0.62;
+  const candidates = [innerRadius, ringRadius * 0.5, ringRadius * 0.72, ringRadius * 0.85];
+  let best: Glyph[] = [];
+  let bestScore = -Infinity;
+  for (const radius of candidates) {
+    const glyphs = isolateGlyphsAt(img, radius);
+    const score = glyphScore(glyphs, radius);
+    if (score > bestScore) {
+      bestScore = score;
+      best = glyphs;
+    }
+  }
+  return best;
+}
+
+/**
+ * How much a candidate glyph set looks like a printed marker value.
+ *
+ * One or two glyphs, filling a sensible share of the disc, tall enough to be a
+ * digit and roughly centred. Deliberately blunt: it only has to rank four
+ * attempts against each other.
+ */
+function glyphScore(glyphs: Glyph[], discR: number): number {
+  if (glyphs.length === 0) return -1;
+  if (glyphs.length > 2) return -1;
+  let score = glyphs.length === 1 ? 1 : 0.8;
+  for (const g of glyphs) {
+    const heightRatio = g.height / discR;
+    // A digit spans a good part of the disc without filling it.
+    score += heightRatio > 0.5 && heightRatio < 1.7 ? 0.5 : -0.4;
+    score += g.fill > 0.15 && g.fill < 0.85 ? 0.3 : -0.2;
+  }
+  return score;
+}
+
+function isolateGlyphsAt(img: GrayImage, innerRadius: number): Glyph[] {
   const size = img.width;
   const half = size / 2;
   const discR = innerRadius;
@@ -205,15 +254,17 @@ export function isolateGlyphs(img: GrayImage, innerRadius: number): Glyph[] {
   if (samples.length < 32) return [];
   const t = otsuThreshold(samples);
 
-  const mask = createGray(size, size);
+  const raw = createGray(size, size);
   for (let y = 0; y < size; y++) {
     const dy = y - half;
     for (let x = 0; x < size; x++) {
       const dx = x - half;
       if (dx * dx + dy * dy > discR * discR) continue;
-      mask.data[y * size + x] = img.data[y * size + x] <= t ? 255 : 0;
+      raw.data[y * size + x] = img.data[y * size + x] <= t ? 255 : 0;
     }
   }
+  // Reconnect strokes broken by noise before anything is judged on its size.
+  const mask = close(raw, 1);
 
   const { labels, components } = connectedComponents(mask, true);
 
