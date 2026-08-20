@@ -19,6 +19,7 @@ import { extractGlyph, GLYPH_SIZE } from '../src/core/glyphShape.ts';
 import type { GlyphMask } from '../src/core/glyphShape.ts';
 import { clusterGlyphs } from '../src/core/glyphClusters.ts';
 import { estimatePitch } from '../src/core/calibrate.ts';
+import { readPrototype } from '../src/core/prototypeReader.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -88,3 +89,22 @@ mkdirSync(outDir, { recursive: true });
 const out = join(outDir, `${basename(name, extname(name))}-prototypes.png`);
 writeFileSync(out, PNG.sync.write(png));
 console.log(`  prototypes: ${out} (${sheetW}x${sheetH})`);
+
+// Read each prototype the way the pipeline does, and show the runners-up.
+const allowedArg = flag('numbers');
+const allowedSet = allowedArg ? new Set(allowedArg.split(',').map(Number)) : null;
+console.log('  readings:');
+for (const c of clusters) {
+  const r = readPrototype(c.prototype, allowedSet);
+  const top = r.ranked
+    .slice(0, 4)
+    .map((s) => `${s.digit}:${s.similarity.toFixed(3)}`)
+    .join('  ');
+  const g = c.prototype;
+  let ink = 0;
+  for (let i = 0; i < g.data.length; i++) if (g.data[i] >= 0.5) ink++;
+  console.log(
+    `    #${c.id} n=${String(c.members.length).padStart(4)} -> ${r.value ?? '?'} ` +
+      `conf ${r.confidence.toFixed(2)}  ink=${ink}  [${top}]`,
+  );
+}

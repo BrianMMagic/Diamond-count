@@ -32,9 +32,18 @@ export interface ClusterOptions {
   /**
    * How different two glyphs may be and still be the same digit.
    *
-   * Measured rather than assumed: across the reference card, two instances of
-   * the same digit stayed below 0.35 while two different digits never came
-   * closer than 0.55, so the boundary sits in open space between them.
+   * Deliberately set tight, because the two ways of being wrong here are not
+   * symmetric. Splitting one digit across several groups costs the user an
+   * extra tap per spare group and cannot change a count. Merging two digits
+   * into one group cannot be repaired at all: whatever the user names it,
+   * every marker in it takes that name, so hundreds of markers are wrong and
+   * nothing on screen says so.
+   *
+   * Measured against synthetic sheets with known contents: at 0.35 a blurred
+   * sheet put its `4`s in with its `2`s and group purity fell to 77%. At 0.22
+   * every case tested — blur, sensor noise, lighting gradients, position and
+   * size jitter, and a sheet modelled on real beads — keeps one digit per
+   * group, at the price of a few more groups to name.
    */
   joinDistance?: number;
   /** Clusters smaller than this are dissolved and their members reassigned. */
@@ -42,7 +51,7 @@ export interface ClusterOptions {
 }
 
 export function clusterGlyphs(glyphs: GlyphMask[], opts: ClusterOptions = {}): GlyphCluster[] {
-  const join = opts.joinDistance ?? 0.35;
+  const join = opts.joinDistance ?? 0.22;
   const minMembers = opts.minMembers ?? 3;
   if (glyphs.length === 0) return [];
 

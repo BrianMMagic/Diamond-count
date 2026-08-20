@@ -68,6 +68,8 @@ export interface GlyphDetectorOptions {
    * What it does exclude is fur shadow, which lands around 30.
    */
   minInkContrast?: number;
+  /** Sauvola window as a fraction of pitch. Exposed for tuning sweeps. */
+  windowFactor?: number;
 }
 
 /** Ink components smaller than this fraction of the pitch are paper noise. */
@@ -84,7 +86,7 @@ export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): Glyph
   // face around it. Sized off the digit rather than the marker, a window that
   // fits inside the glyph makes its own strokes the local "background" and the
   // digit dissolves.
-  const window = Math.max(3, Math.round(pitch * 0.22));
+  const window = Math.max(3, Math.round(pitch * (opts.windowFactor ?? 0.22)));
   const ink = sauvola(gray, window, k);
 
   const labelled = connectedComponents(ink, false);
@@ -164,20 +166,31 @@ function measureFace(
   const faceRadius = Math.max(2, Math.round(pitch * 0.22));
   const outerRadius = Math.max(faceRadius + 2, Math.round(pitch * 0.45));
 
-  const face = localMeanStd(integral, Math.round(cx), Math.round(cy), faceRadius);
+  const rough = localMeanStd(integral, Math.round(cx), Math.round(cy), faceRadius);
   const outer = localMeanStd(integral, Math.round(cx), Math.round(cy), outerRadius);
-
   const glyphMean = meanOfComponent(gray, labelled, c);
-  const inkContrast = face.mean - glyphMean;
+
+  // Measure the face without the digit standing on it.
+  //
+  // A window centred on the glyph necessarily contains the glyph, so a mean
+  // taken over all of it is pulled down in proportion to how much ink the digit
+  // carries. That turns both tests below into partial measurements of which
+  // digit is being looked at: a `1` is a solid bar sitting squarely in the
+  // middle of the window, and its "face" came out around 7 grey levels darker
+  // than its own surroundings — enough to fail a check meant to catch things
+  // that are not markers at all, and it silently deleted `1`s in proportion to
+  // how large the markers were.
+  const face = sampleFace(gray, cx, cy, faceRadius, (rough.mean + glyphMean) / 2);
+  const faceMean = face.n >= 8 ? face.mean : rough.mean;
+
+  const inkContrast = faceMean - glyphMean;
   if (inkContrast < minInkContrast) return null;
 
   // The face must be the brighter thing locally. Equality is allowed a little
   // slack because a pearl marker on pale fur genuinely is close to its
   // surroundings — that case is carried by the ink contrast above instead.
-  const faceContrast = face.mean - outer.mean;
+  const faceContrast = faceMean - outer.mean;
   if (faceContrast < -6) return null;
-
-  const faceRoughness = measureRoughness(gray, cx, cy, faceRadius, (face.mean + glyphMean) / 2);
 
   const score = inkContrast + Math.max(0, faceContrast) * 0.5;
   return {
@@ -187,28 +200,28 @@ function measureFace(
     minY: c.minY,
     maxX: c.maxX,
     maxY: c.maxY,
-    faceMean: face.mean,
+    faceMean,
     glyphMean,
     faceContrast,
-    faceRoughness,
+    faceRoughness: face.roughness,
     score,
   };
 }
 
 /**
- * Spread of the bright part of the face, relative to its own brightness.
+ * Brightness and evenness of the marker face, ignoring the digit printed on it.
  *
- * Pixels darker than `split` are the digit and are left out — otherwise every
- * marker looks rough in proportion to how much ink its digit happens to carry,
- * and a `4` would score very differently from a `1`.
+ * Pixels darker than `split` are the digit and are left out. Including them
+ * makes both figures depend on how much ink the digit happens to carry, so a
+ * `4` and a `1` would be measured on different scales.
  */
-function measureRoughness(
+function sampleFace(
   gray: GrayImage,
   cx: number,
   cy: number,
   radius: number,
   split: number,
-): number {
+): { mean: number; roughness: number; n: number } {
   const x0 = Math.max(0, Math.round(cx - radius));
   const x1 = Math.min(gray.width - 1, Math.round(cx + radius));
   const y0 = Math.max(0, Math.round(cy - radius));
@@ -230,10 +243,11 @@ function measureRoughness(
       sumSq += v * v;
     }
   }
-  if (n < 8) return 1;
+  if (n < 8) return { mean: 0, roughness: 1, n };
   const mean = sum / n;
-  if (mean <= 0) return 1;
-  return Math.sqrt(Math.max(0, sumSq / n - mean * mean)) / mean;
+  if (mean <= 0) return { mean: 0, roughness: 1, n };
+  const roughness = Math.sqrt(Math.max(0, sumSq / n - mean * mean)) / mean;
+  return { mean, roughness, n };
 }
 
 /**

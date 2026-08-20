@@ -80,12 +80,24 @@ export interface PitchEstimate {
  * across a photographed page dominates the correlation at every lag and buries
  * the periodic component entirely.
  */
-export function estimatePitch(gray: GrayImage, maxPitch = 120): PitchEstimate {
+export function estimatePitch(gray: GrayImage, maxPitch = 0): PitchEstimate {
+  // Scale the search range to the image rather than fixing it. A photograph
+  // taken closer, or on a better camera, puts the markers further apart in
+  // pixels; with the range capped at a constant the true spacing falls outside
+  // it and the estimate does not degrade, it collapses — a sheet whose markers
+  // sat 135px apart returned nothing at all against a cap of 120.
+  if (maxPitch <= 0) {
+    maxPitch = Math.max(120, Math.min(gray.width, gray.height) / 8);
+  }
   // Work small. Spacing is a low-frequency property and the cost is quadratic
   // in the number of lags we test.
   const scale = Math.min(1, 900 / Math.max(gray.width, gray.height));
   const small = scale < 1 ? downscaleGray(gray, scale) : gray;
-  const flat = normalizeIllumination(small, Math.round(12 / scale > 40 ? 40 : 12), 1);
+  // The flattening window has to be wider than the spacing being looked for.
+  // Anything narrower averages over a marker and its neighbours and subtracts
+  // away the very periodicity this function exists to find.
+  const flatRadius = Math.max(8, Math.round(maxPitch * scale));
+  const flat = normalizeIllumination(small, flatRadius, 1);
 
   const { width: w, height: h, data } = flat;
   const mean = sum(data) / data.length;
@@ -118,27 +130,27 @@ export function estimatePitch(gray: GrayImage, maxPitch = 120): PitchEstimate {
     scores[lag] = n > 0 ? acc / n : 0;
   }
 
-  // The first strong local maximum is the grid spacing; later peaks are its
-  // harmonics. Taking the global maximum would sometimes return 2x the pitch.
   const baseline = median(Array.from(scores.slice(minLag, maxLag + 1)));
-  let best = 0;
-  let bestScore = 0;
+  const peaks: Array<{ lag: number; score: number }> = [];
   for (let lag = minLag + 1; lag < maxLag; lag++) {
     const s = scores[lag];
     if (s <= scores[lag - 1] || s < scores[lag + 1]) continue;
     if (s <= baseline) continue;
-    if (best === 0 || s > bestScore * 1.25) {
-      if (best === 0) {
-        best = lag;
-        bestScore = s;
-      }
-    }
+    peaks.push({ lag, score: s });
   }
-  if (best === 0) return { pitch: 0, strength: 0 };
+  if (peaks.length === 0) return { pitch: 0, strength: 0 };
 
-  const peak = refinePeak(scores, best);
-  const spread = Math.max(1e-6, bestScore - baseline);
-  const strength = Math.max(0, Math.min(1, spread / (Math.abs(bestScore) + 1e-6)));
+  // A grid correlates with itself at its spacing and again at every multiple of
+  // it, so the tallest peak is not necessarily the spacing — it is often twice
+  // it. The fundamental is the earliest peak that is still a serious one, so
+  // take the strongest, then walk back to the first peak that comes close to
+  // matching it.
+  const strongest = peaks.reduce((a, b) => (b.score > a.score ? b : a));
+  const fundamental = peaks.find((p) => p.score >= strongest.score * 0.5) ?? strongest;
+
+  const peak = refinePeak(scores, fundamental.lag);
+  const spread = Math.max(0, strongest.score - baseline);
+  const strength = Math.max(0, Math.min(1, spread / (Math.abs(strongest.score) + 1e-6)));
   return { pitch: peak / scale, strength };
 }
 

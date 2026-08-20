@@ -13,8 +13,17 @@ import type { GlyphDetection } from './glyphDetector.ts';
 
 /** Edge length of the normalised glyph picture. */
 export const GLYPH_SIZE = 32;
-/** Pixels of blank kept around the digit inside that box. */
-const MARGIN = 3;
+/**
+ * Pixels of blank kept around the digit inside that box.
+ *
+ * Must match the margin the stroke templates are rasterised with. The distance
+ * between a glyph and a template is measured in pixels, so normalising the two
+ * to different sizes compares a digit against a slightly larger copy of every
+ * candidate — and a `1`, being a bare vertical stroke, is the shape that best
+ * tolerates the mismatch. At a margin of 3 against templates built at 2, every
+ * prototype on the reference card read as `1`.
+ */
+const MARGIN = 2;
 
 export interface GlyphMask {
   /** GLYPH_SIZE * GLYPH_SIZE, 0 = blank, 1 = ink. This is what gets displayed. */
@@ -114,27 +123,44 @@ export function extractGlyph(gray: GrayImage, d: GlyphDetection, pitch: number):
   const offX = MARGIN + (inner - iw * scale) / 2;
   const offY = MARGIN + (inner - ih * scale) / 2;
 
+  // Resample by walking the DESTINATION and averaging the source area each
+  // output cell covers.
+  //
+  // Scattering source pixels into the destination instead looks equivalent and
+  // is not: a digit is often smaller than the box it is normalised into, and
+  // when a 11-pixel glyph is enlarged to 28 most destination cells receive no
+  // source pixel at all, so the stroke arrives full of holes and its shape
+  // stops being comparable to anything. Gathering covers every output cell by
+  // construction, and averaging the covered area (rather than taking the
+  // nearest pixel) keeps a thin stroke alive when the glyph is being shrunk
+  // instead.
   const data = new Float32Array(GLYPH_SIZE * GLYPH_SIZE);
-  // Accumulate source pixels into destination cells so that downscaling
-  // averages rather than samples; a one-pixel-wide stroke otherwise vanishes
-  // depending on where the grid happens to fall.
-  const weight = new Float32Array(GLYPH_SIZE * GLYPH_SIZE);
-  for (let y = inkMinY; y <= inkMaxY; y++) {
-    for (let x = inkMinX; x <= inkMaxX; x++) {
-      const dx = Math.round(offX + (x - inkMinX) * scale);
-      const dy = Math.round(offY + (y - inkMinY) * scale);
-      if (dx < 0 || dy < 0 || dx >= GLYPH_SIZE || dy >= GLYPH_SIZE) continue;
-      const di = dy * GLYPH_SIZE + dx;
-      data[di] += ink[y * w + x] ? 1 : 0;
-      weight[di] += 1;
+  const step = 1 / scale;
+  for (let dy = 0; dy < GLYPH_SIZE; dy++) {
+    // Source span this output row covers, in ink-box coordinates.
+    const sy0 = (dy - offY) * step;
+    const sy1 = sy0 + step;
+    if (sy1 <= 0 || sy0 >= ih) continue;
+    const y0 = Math.max(0, Math.floor(sy0));
+    const y1 = Math.min(ih - 1, Math.ceil(sy1) - 1);
+    for (let dx = 0; dx < GLYPH_SIZE; dx++) {
+      const sx0 = (dx - offX) * step;
+      const sx1 = sx0 + step;
+      if (sx1 <= 0 || sx0 >= iw) continue;
+      const x0 = Math.max(0, Math.floor(sx0));
+      const x1 = Math.min(iw - 1, Math.ceil(sx1) - 1);
+      let on = 0;
+      let n = 0;
+      for (let sy = y0; sy <= y1; sy++) {
+        const row = (inkMinY + sy) * w + inkMinX;
+        for (let sx = x0; sx <= x1; sx++) {
+          if (ink[row + sx]) on++;
+          n++;
+        }
+      }
+      if (n > 0) data[dy * GLYPH_SIZE + dx] = on / n;
     }
   }
-  for (let i = 0; i < data.length; i++) {
-    if (weight[i] > 0) data[i] /= weight[i];
-  }
-  // Downscaling can leave single-pixel holes along a stroke. Closing them keeps
-  // the shape distance measuring shape rather than resampling luck.
-  fillPinholes(data);
 
   return { data, soft: soften(data), aspect: iw / ih, density: inkCount / (iw * ih) };
 }
@@ -234,18 +260,6 @@ function isolateDigit(
   return out;
 }
 
-function fillPinholes(data: Float32Array): void {
-  const n = GLYPH_SIZE;
-  for (let y = 1; y < n - 1; y++) {
-    for (let x = 1; x < n - 1; x++) {
-      const i = y * n + x;
-      if (data[i] > 0.35) continue;
-      const around =
-        data[i - 1] + data[i + 1] + data[i - n] + data[i + n];
-      if (around >= 3.2) data[i] = 1;
-    }
-  }
-}
 
 /**
  * Distance between two normalised glyphs, 0 (identical) to 1.

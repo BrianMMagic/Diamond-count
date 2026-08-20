@@ -199,6 +199,16 @@ async function main(): Promise<void> {
       `  counts: ${[...summary.counts.entries()].sort((a, b) => a[0] - b[0]).map(([n, c]) => `${n}: ${c}`).join(', ') || '—'}`,
     );
 
+    // The groups are what the user is actually asked to confirm, so show them:
+    // a count that looks right built out of groups that look wrong is the case
+    // worth catching.
+    for (const g of result.stats.shapeGroups) {
+      console.log(
+        `    group ${g.index}: ${String(g.count).padStart(4)} markers -> ` +
+          `${g.number ?? 'not identified'}  (match ${g.confidence.toFixed(2)}, sharpness ${g.sharpness.toFixed(2)})`,
+      );
+    }
+
     const truth = loadTruth(file);
     if (truth) console.log(formatEvaluation(evaluate(truth, summary)));
     else console.log(`  (no ground truth — add samples/ground-truth/${basename(file, extname(file))}.json)`);
