@@ -95,6 +95,21 @@ const STAGE_RANGE: Record<PipelineStage, [number, number]> = {
  */
 const MIN_PROTOTYPE_SIMILARITY = 0.72;
 
+/**
+ * How unlike every marked example a detection may be and still be a marker.
+ *
+ * Some of what survives detection is not a marker at all — fur texture that
+ * happened to read as dark ink on a bright face. Given examples to compare
+ * against, those are not merely uncertain, they are plainly different: across
+ * the reference card 99% of real markers sat within 0.56 of an example, while
+ * the ones a person could see were not numbers sat at 1.78.
+ *
+ * Anything past this is set aside rather than counted, because "we do not know
+ * which number this is" and "this is not a number" deserve different answers.
+ * Queuing them asks the user to name fur, and counting them inflates the total.
+ */
+const MAX_EXEMPLAR_DISTANCE = 1.4;
+
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 export async function runPipeline(original: RgbaImage, opts: PipelineOptions): Promise<AnalysisResult> {
@@ -228,6 +243,8 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   report('counting', 0);
   const radius = pitch * 0.46;
   const markers: MarkerDetection[] = [];
+  /** Detections that turned out not to resemble any number the user marked. */
+  const notMarkers: MarkerCandidate[] = [];
   clusters.forEach((cluster, groupIndex) => {
     const group = groups[groupIndex];
     for (const memberIndex of cluster.members) {
@@ -242,6 +259,10 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       const match = exemplars.length > 0
         ? matchExemplar(cluster.prototype, sampleRim(original, d.x, d.y, pitch), exemplars)
         : null;
+      if (match && match.distance > MAX_EXEMPLAR_DISTANCE) {
+        notMarkers.push(baseCandidate(d, radius, `x${notMarkers.length}`));
+        continue;
+      }
       const number = match ? match.digit : group.number;
       const score = match ? match.margin : margin;
       const level = match ? confidenceOfMatch(match) : confidenceOf(group, margin);
@@ -274,9 +295,10 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   // Detections whose digit could not be isolated are not counted and not queued
   // as work. They are reported as what they are: things that turned out not to
   // carry a number.
-  const discarded: MarkerCandidate[] = withoutGlyph.map((d, i) =>
-    baseCandidate(d, radius, `d${i}`),
-  );
+  const discarded: MarkerCandidate[] = [
+    ...withoutGlyph.map((d, i) => baseCandidate(d, radius, `d${i}`)),
+    ...notMarkers,
+  ];
 
   const durationMs = now() - started;
   report('done', 1);
@@ -288,7 +310,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
     settings,
     stats: {
       candidatesProposed: detections.length,
-      candidatesRejected: withoutGlyph.length,
+      candidatesRejected: withoutGlyph.length + notMarkers.length,
       duplicatesMerged: 0,
       finalMarkers: markers.length,
       estimatedRadius: radius,
@@ -307,7 +329,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       shapeGroups: groups,
       groupAssigned: markers.length,
       unmatchedMarkers: 0,
-      discardedWithoutDigit: withoutGlyph.length,
+      discardedWithoutDigit: withoutGlyph.length + notMarkers.length,
       detectionYield: detections.length > 0 ? glyphs.length / detections.length : 0,
       detectionSensitivity: 0.5,
       isolatedRejected: 0,
