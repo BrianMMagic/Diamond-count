@@ -45,6 +45,17 @@ export interface SynthOptions {
   jitter?: number;
   /** Random radius jitter as a fraction of the radius. */
   radiusJitter?: number;
+  /**
+   * How large the printed digit is relative to the marker's light centre.
+   *
+   * Kits differ here more than they look like they should, and it matters
+   * because every size bound in the detector is expressed against marker
+   * *spacing*, not against the marker. A card whose beads sit apart with a
+   * modest digit and a card whose beads touch with a digit filling the face put
+   * that ratio either side of 0.5 — and a detector tuned on the first silently
+   * rejected every real digit on the second.
+   */
+  glyphScale?: number;
   /** Paint coloured blobs under the markers, like printed artwork. */
   artwork?: boolean;
   /**
