@@ -134,6 +134,17 @@ export interface ShapeGroup {
   /** Mean distance of members to the averaged shape, in pixels. */
   spread: number;
   glyphCount: number;
+  /**
+   * How many of this group's markers actually carry the group's number.
+   *
+   * Normally the same as `count`. It can be smaller once the user has marked
+   * examples, because a marker is then named on its own bead colour as well as
+   * on the shared shape of its group — so a group of look-alike glyphs can hand
+   * some of its markers to a different number. Reporting `count` as if it were
+   * the number of `4`s on the card would then overstate them by exactly the
+   * markers colour moved elsewhere.
+   */
+  assignedCount?: number;
   /** Averaged glyph mask(s), 32x32 each, laid out side by side. */
   prototype: number[];
 }

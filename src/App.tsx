@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppController } from './state/store.ts';
 import { UploadPanel } from './ui/UploadPanel.tsx';
 import { ProgressPanel } from './ui/ProgressPanel.tsx';
@@ -11,17 +11,23 @@ import { AdvancedSettings } from './ui/AdvancedSettings.tsx';
 import { NumberPad } from './ui/NumberPad.tsx';
 import { NumberSetPicker } from './ui/NumberSetPicker.tsx';
 import { GroupPanel } from './ui/GroupPanel.tsx';
+import { TeachPanel } from './ui/TeachPanel.tsx';
 
-type Sheet = 'none' | 'marker' | 'review' | 'debug' | 'add';
+type Sheet = 'none' | 'marker' | 'review' | 'debug' | 'add' | 'teach';
 
 export default function App() {
   const app = useAppController();
   const [sheet, setSheet] = useState<Sheet>('none');
   const [pendingAdd, setPendingAdd] = useState<{ x: number; y: number } | null>(null);
+  /** True while the user is tapping markers to name them as examples. */
+  const [marking, setMarking] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(
     () => typeof location !== 'undefined' && new URLSearchParams(location.search).has('debug'),
   );
+
+  const markingRef = useRef(false);
+  markingRef.current = marking;
 
   // Selecting a marker opens its editor; clearing the selection closes it.
   useEffect(() => {
@@ -37,7 +43,7 @@ export default function App() {
 
   const onAddAt = useCallback((x: number, y: number) => {
     setPendingAdd({ x, y });
-    setSheet('add');
+    setSheet(markingRef.current ? 'teach' : 'add');
   }, []);
 
   const hasImage = !!app.image;
@@ -86,7 +92,9 @@ export default function App() {
               possibleMissed={app.result?.possibleMissed ?? []}
               overlay={app.overlay}
               selectedId={app.selectedId}
-              addMode={app.addMode}
+              addMode={app.addMode || marking}
+              exemplars={app.exemplars}
+              exemplarRadius={app.result?.stats.estimatedRadius}
               onSelect={(m) => {
                 app.setSelectedId(m?.id ?? null);
                 setSheet(m ? 'marker' : 'none');
@@ -142,11 +150,26 @@ export default function App() {
                   ? 'Very large photo — it was scaled down slightly so your browser can handle it.'
                   : 'Ready to analyse. Everything runs on your device.'}
               </p>
+              <TeachPanel
+                exemplars={app.exemplars}
+                marking={marking}
+                onStartMarking={() => setMarking(true)}
+                onStopMarking={() => setMarking(false)}
+                onRemove={app.removeExemplar}
+                onClear={app.clearExemplars}
+              />
               <NumberSetPicker
                 value={app.settings.allowedNumbers}
                 onChange={(v) => app.setSettings({ ...app.settings, allowedNumbers: v })}
               />
-              <button type="button" className="btn btn-primary btn-block" onClick={() => app.analyze()}>
+              <button
+                type="button"
+                className="btn btn-primary btn-block"
+                onClick={() => {
+                  setMarking(false);
+                  app.analyze();
+                }}
+              >
                 Analyze image
               </button>
               <AdvancedSettings
@@ -244,6 +267,31 @@ export default function App() {
           }}
           onClose={() => setSheet('none')}
         />
+      )}
+
+      {sheet === 'teach' && pendingAdd && (
+        <div className="sheet" role="dialog" aria-label="Name this example">
+          <div className="sheet-head">
+            <strong>Which number is this?</strong>
+            <button type="button" className="link" onClick={closeSheet}>
+              Cancel
+            </button>
+          </div>
+          <div className="sheet-body">
+            <p className="panel-lede">
+              Everything else on the photo gets matched against the examples you mark, so pick a
+              marker you can read clearly.
+            </p>
+            <NumberPad
+              value={null}
+              onPick={(v) => {
+                app.addExemplar(pendingAdd.x, pendingAdd.y, v);
+                setPendingAdd(null);
+                setSheet('none');
+              }}
+            />
+          </div>
+        </div>
       )}
 
       {sheet === 'add' && pendingAdd && (

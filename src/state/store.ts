@@ -12,7 +12,7 @@ import type {
   MarkerDetection,
   ProgressUpdate,
 } from '../core/types.ts';
-import type { WorkerResponse } from '../worker/protocol.ts';
+import type { ExemplarPoint, WorkerResponse } from '../worker/protocol.ts';
 
 export type Phase = 'idle' | 'loaded' | 'analyzing' | 'results';
 
@@ -41,14 +41,25 @@ export function useAppController() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<DetectorSettings>(DEFAULT_SETTINGS);
+  /**
+   * Markers the user has pointed at and named, one per digit.
+   *
+   * Kept beside the settings rather than inside them because they belong to one
+   * image: the shape and bead colour measured at these points are what the
+   * analysis matches everything else against, and neither survives a change of
+   * photograph.
+   */
+  const [exemplars, setExemplars] = useState<ExemplarPoint[]>([]);
   const [overlay, setOverlay] = useState<OverlayState>(DEFAULT_OVERLAY);
   const [showAllNumbers, setShowAllNumbers] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addMode, setAddMode] = useState(false);
   const workerRef = useRef<Worker | null>(null);
   const imageRef = useRef<LoadedImage | null>(null);
+  const exemplarsRef = useRef<ExemplarPoint[]>([]);
 
   imageRef.current = image;
+  exemplarsRef.current = exemplars;
 
   useEffect(
     () => () => {
@@ -121,7 +132,10 @@ export function useAppController() {
       };
 
       const payload = toTransferable(current.full);
-      worker.postMessage({ type: 'analyze', image: payload, settings: effective }, [payload.buffer]);
+      worker.postMessage(
+        { type: 'analyze', image: payload, settings: effective, exemplars: exemplarsRef.current },
+        [payload.buffer],
+      );
     },
     [settings],
   );
@@ -186,6 +200,22 @@ export function useAppController() {
     },
     [updateMarker],
   );
+
+  /**
+   * Record an example of a digit at a point the user tapped.
+   *
+   * One per digit is enough; marking a second replaces the first, so tapping
+   * again is how a mistake is undone rather than a thing to warn about.
+   */
+  const addExemplar = useCallback((x: number, y: number, digit: number) => {
+    setExemplars((prev) => [...prev.filter((e) => e.digit !== digit), { digit, x, y }]);
+  }, []);
+
+  const removeExemplar = useCallback((digit: number) => {
+    setExemplars((prev) => prev.filter((e) => e.digit !== digit));
+  }, []);
+
+  const clearExemplars = useCallback(() => setExemplars([]), []);
 
   const addMarker = useCallback((x: number, y: number, value: number) => {
     setResult((prev) => {
@@ -344,6 +374,7 @@ export function useAppController() {
     result,
     error,
     settings,
+    exemplars,
     overlay,
     showAllNumbers,
     selectedId,
@@ -364,6 +395,9 @@ export function useAppController() {
     rejectMarker,
     markUnknown,
     addMarker,
+    addExemplar,
+    removeExemplar,
+    clearExemplars,
     confirmMissed,
     dismissMissed,
     relabelMarkerGroup,

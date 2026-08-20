@@ -101,7 +101,7 @@ export function drawOverlay(
   ctx.restore();
 }
 
-function roundRect(
+export function roundRect(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
@@ -136,4 +136,47 @@ export function hitTest(
     }
   }
   return best;
+}
+
+/**
+ * Draw the markers the user pointed at as examples.
+ *
+ * Deliberately loud and unlike everything else on the overlay. These few points
+ * decide what every other marker is called, so it has to be obvious at a glance
+ * which ones they are and what each was named — a single example put on the
+ * wrong marker is the one mistake here that silently moves hundreds of counts.
+ */
+export function drawExemplars(
+  ctx: CanvasRenderingContext2D,
+  exemplars: Array<{ digit: number; x: number; y: number }>,
+  radius: number,
+  scale: number,
+): void {
+  const px = 1 / Math.max(scale, 1e-6);
+  ctx.save();
+  ctx.lineJoin = 'round';
+  for (const e of exemplars) {
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, radius * 1.15, 0, Math.PI * 2);
+    ctx.lineWidth = 4 * px;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+    ctx.lineWidth = 2.5 * px;
+    ctx.strokeStyle = MARKER_COLORS.manual;
+    ctx.stroke();
+
+    const label = String(e.digit);
+    const size = Math.max(12, radius * 1.1);
+    ctx.font = `700 ${size}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const ly = e.y - radius * 1.9;
+    const w = ctx.measureText(label).width + size * 0.7;
+    ctx.fillStyle = MARKER_COLORS.manual;
+    roundRect(ctx, e.x - w / 2, ly - size * 0.65, w, size * 1.3, size * 0.35);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(label, e.x, ly);
+  }
+  ctx.restore();
 }

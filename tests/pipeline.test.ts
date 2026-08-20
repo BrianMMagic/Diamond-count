@@ -131,6 +131,68 @@ describe('the analysis, against sheets whose contents are known', () => {
     }
   }, 180_000);
 
+  describe('when the user marks one example of each number', () => {
+    const beadSheet = () =>
+      synthesize({
+        counts: { 1: 220, 2: 420, 3: 210, 4: 115 },
+        radius: 17,
+        spacingFactor: 1.08,
+        jitter: 0.06,
+        noise: 4,
+        seed: 2024,
+        ringColors: { 1: [225, 224, 220], 2: [22, 22, 24], 3: [196, 150, 70], 4: [214, 120, 110] },
+        faceColors: { 1: [238, 238, 236], 2: [245, 244, 240], 3: [205, 163, 84], 4: [248, 246, 244] },
+        specular: 0.55,
+      });
+
+    /** One marker of each digit, as if the user had tapped them. */
+    const examples = (placed: ReturnType<typeof synthesize>['markers']) =>
+      [...new Set(placed.map((m) => m.number))].map((digit) => {
+        const m = placed.find((p) => p.number === digit)!;
+        return { digit, x: m.x, y: m.y };
+      });
+
+    it('counts every number exactly', async () => {
+      const { image, markers, truth } = beadSheet();
+      const result = await runPipeline(image, {
+        settings: { ...DEFAULT_SETTINGS, useTesseract: false },
+        exemplars: examples(markers),
+      });
+      const summary = countMarkers(result.markers);
+      for (const n of [1, 2, 3, 4]) {
+        expect(summary.counts.get(n), `count of ${n}`).toBe(Number(truth.counts[String(n)]));
+      }
+    }, 180_000);
+
+    it('cannot produce a number nobody pointed at', async () => {
+      // The examples deliberately omit 3. Nothing may come back as a 3, however
+      // much some marker's glyph happens to look like one.
+      const { image, markers } = beadSheet();
+      const result = await runPipeline(image, {
+        settings: { ...DEFAULT_SETTINGS, useTesseract: false },
+        exemplars: examples(markers).filter((e) => e.digit !== 3),
+      });
+      const summary = countMarkers(result.markers);
+      expect([...summary.counts.keys()].sort((a, b) => a - b)).toEqual([1, 2, 4]);
+    }, 180_000);
+
+    it('reports how many of a group actually carry its number', async () => {
+      const { image, markers } = beadSheet();
+      const result = await runPipeline(image, {
+        settings: { ...DEFAULT_SETTINGS, useTesseract: false },
+        exemplars: examples(markers),
+      });
+      for (const g of result.stats.shapeGroups) {
+        expect(g.assignedCount, `group ${g.index}`).toBeDefined();
+        expect(g.assignedCount!).toBeLessThanOrEqual(g.count);
+        const actual = result.markers.filter(
+          (m) => m.shapeGroup === g.index && m.finalNumber === g.number,
+        ).length;
+        expect(g.assignedCount).toBe(actual);
+      }
+    }, 180_000);
+  });
+
   it('never emits two markers for one physical marker', async () => {
     const { image, markers } = synthesize({
       counts: { 1: 30, 2: 45, 3: 25, 4: 20 }, radius: 17, spacingFactor: 1.08, seed: 88,

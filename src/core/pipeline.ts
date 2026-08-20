@@ -21,6 +21,9 @@ import type { GlyphMask } from './glyphShape.ts';
 import { clusterGlyphs, membershipMargin } from './glyphClusters.ts';
 import { estimatePitch } from './calibrate.ts';
 import { readPrototype } from './prototypeReader.ts';
+import { matchExemplar, exemplarDigits } from './exemplars.ts';
+import type { Exemplar, ExemplarMatch } from './exemplars.ts';
+import { sampleRim } from './markerColor.ts';
 import type {
   AnalysisResult,
   ConfidenceLevel,
@@ -48,6 +51,15 @@ export interface PipelineOptions {
     useTesseract: boolean,
     allowedNumbers: number[] | null,
   ) => Promise<{ classifier: NumberClassifier; engine: string; warning?: string }>;
+  /**
+   * Markers the user has identified by hand, one per digit.
+   *
+   * Supplied as points; the glyph and bead colour at each point are measured
+   * here so the caller does not have to know how either is done. When present
+   * they replace the built-in reader entirely — a digit nobody pointed at
+   * cannot be produced.
+   */
+  exemplars?: Array<{ digit: number; x: number; y: number }>;
 }
 
 const STAGE_LABELS: Record<PipelineStage, string> = {
@@ -151,6 +163,22 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   report('cropping', 1, `${glyphs.length} digits isolated`);
   await tick();
 
+  // ---- Stage 4b: measure the markers the user identified ---------------------
+  const exemplars: Exemplar[] = [];
+  for (const e of opts.exemplars ?? []) {
+    const near = nearestDetection(detections, e.x, e.y, pitch);
+    if (!near) continue;
+    const glyph = extractGlyph(gray, near, pitch);
+    if (!glyph) continue;
+    exemplars.push({
+      digit: e.digit,
+      x: near.x,
+      y: near.y,
+      glyph,
+      rim: sampleRim(original, near.x, near.y, pitch),
+    });
+  }
+
   // ---- Stage 5: group by shape ----------------------------------------------
   report('clustering', 0);
   t = now();
@@ -162,9 +190,8 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   // ---- Stage 6: read one averaged picture per group -------------------------
   report('reading', 0);
   t = now();
-  const allowed = settings.allowedNumbers && settings.allowedNumbers.length > 0
-    ? new Set(settings.allowedNumbers)
-    : null;
+  const declared = exemplars.length > 0 ? exemplarDigits(exemplars) : settings.allowedNumbers;
+  const allowed = declared && declared.length > 0 ? new Set(declared) : null;
   const prototypes = clusters.map((c) => c.prototype);
   const groups: ShapeGroup[] = clusters.map((c, index) => {
     const reading = readPrototype(c.prototype, allowed);
@@ -174,10 +201,16 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
     // silence; left unnamed it arrives on the results screen as a picture the
     // user can see is not a number, and reject in one tap.
     const identified = reading.similarity >= MIN_PROTOTYPE_SIMILARITY;
+    // The group's own name comes from shape alone; individual markers in it are
+    // then named with their colour as well, so a group can legitimately hold
+    // markers of more than one digit once exemplars are in play.
+    const byExample = exemplars.length > 0
+      ? matchExemplar(c.prototype, averageRim(original, c.members.map((i) => withGlyph[i]), pitch), exemplars)
+      : null;
     return {
       index,
-      number: identified ? reading.value : null,
-      confidence: reading.confidence,
+      number: byExample ? byExample.digit : identified ? reading.value : null,
+      confidence: byExample ? byExample.margin : reading.confidence,
       count: c.members.length,
       // A tight group is a sharp average. Spread is already a 0-1 shape
       // distance, so sharpness is simply its complement.
@@ -200,21 +233,43 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
     for (const memberIndex of cluster.members) {
       const d = withGlyph[memberIndex];
       const margin = membershipMargin(glyphs[memberIndex], prototypes);
+
+      // With examples to go on, each marker is named individually: the shape of
+      // the group it belongs to, which is sharp, plus the colour of this marker,
+      // which is what tells it apart from its neighbours in that group. Shape
+      // alone had grouped seven plain `1`s, `2`s and `3`s in with the `4`s on the
+      // reference card, and no amount of naming the group could have saved them.
+      const match = exemplars.length > 0
+        ? matchExemplar(cluster.prototype, sampleRim(original, d.x, d.y, pitch), exemplars)
+        : null;
+      const number = match ? match.digit : group.number;
+      const score = match ? match.margin : margin;
+      const level = match ? confidenceOfMatch(match) : confidenceOf(group, margin);
+
       markers.push({
         ...baseCandidate(d, radius, `m${markers.length}`),
         shapeGroup: groupIndex,
-        finalNumber: group.number,
-        finalScore: margin,
-        finalConfidence: confidenceOf(group, margin),
-        classificationMethod: group.number == null ? 'unknown' : 'group',
-        needsReview: group.number == null || confidenceOf(group, margin) === 'review',
+        finalNumber: number,
+        finalScore: score,
+        finalConfidence: level,
+        classificationMethod: number == null ? 'unknown' : 'group',
+        needsReview: number == null || level === 'review',
         reason:
-          group.number == null
+          number == null
             ? `Digit shape group ${groupIndex} has not been named yet`
-            : `Matched digit shape group ${groupIndex}, read as ${group.number} from the average of ${cluster.members.length} markers`,
+            : match
+              ? `Matched the example you marked as ${number}, on shape and bead colour`
+              : `Matched digit shape group ${groupIndex}, read as ${number} from the average of ${cluster.members.length} markers`,
       });
     }
   });
+
+  // The groups were named before any marker was, so where colour has since moved
+  // markers out of a group, say so rather than reporting the group's size as a
+  // count of its number.
+  for (const g of groups) {
+    g.assignedCount = markers.filter((m) => m.shapeGroup === g.index && m.finalNumber === g.number).length;
+  }
 
   // Detections whose digit could not be isolated are not counted and not queued
   // as work. They are reported as what they are: things that turned out not to
@@ -295,6 +350,51 @@ export function refineWithCorrections(result: AnalysisResult): AnalysisResult {
  * marker may sit between two groups. Both have to be good for a marker to pass
  * without being looked at.
  */
+/**
+ * How far a marker sat from the example it was matched to.
+ *
+ * Distance decides first: a marker unlike every example the user gave is worth
+ * looking at however clearly it beat the runner-up. The margin then catches the
+ * marker that sits between two examples.
+ */
+function confidenceOfMatch(match: ExemplarMatch): ConfidenceLevel {
+  if (match.digit == null) return 'review';
+  if (match.distance > 1.4 || match.margin < 0.05) return 'review';
+  if (match.distance > 0.9 || match.margin < 0.15) return 'medium';
+  return 'high';
+}
+
+/** Mean rim colour across a group, for naming the group as a whole. */
+function averageRim(image: RgbaImage, members: GlyphDetection[], pitch: number) {
+  const sums = [0, 0, 0];
+  for (const d of members) {
+    const c = sampleRim(image, d.x, d.y, pitch);
+    sums[0] += c[0] / members.length;
+    sums[1] += c[1] / members.length;
+    sums[2] += c[2] / members.length;
+  }
+  return sums as [number, number, number];
+}
+
+/** The detection closest to where the user tapped, within one marker. */
+function nearestDetection(
+  detections: GlyphDetection[],
+  x: number,
+  y: number,
+  pitch: number,
+): GlyphDetection | null {
+  let best: GlyphDetection | null = null;
+  let bestD = pitch * 0.75;
+  for (const d of detections) {
+    const dist = Math.hypot(d.x - x, d.y - y);
+    if (dist < bestD) {
+      bestD = dist;
+      best = d;
+    }
+  }
+  return best;
+}
+
 function confidenceOf(group: ShapeGroup, margin: number): ConfidenceLevel {
   if (group.number == null) return 'review';
   if (group.sharpness < 0.35 || margin < 0.08) return 'review';

@@ -17,6 +17,7 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     const result = await runPipeline(image, {
       settings: msg.settings,
+      exemplars: msg.exemplars,
       onProgress: (update) => post({ type: 'progress', update }),
     });
     const handBack = toTransferable(image);

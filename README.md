@@ -7,7 +7,7 @@ for every number on it. Everything runs in the browser — **images are processe
 on your device and are not uploaded.**
 
 ```
-Upload image → wait a few seconds → check the digits it found → done.
+Upload image → (optional) mark one example of each number → wait → check → done.
 ```
 
 The reference photograph is a bead card of 640 markers. It analyses in about
@@ -25,6 +25,7 @@ npm test           # unit + end-to-end tests
 npm run synth      # accuracy against sheets with known contents
 npm run samples    # run real photographs in samples/ through the pipeline
 npm run browser    # drive the built app in a real browser and screenshot it
+npm run browser:teach  # same, but marking one example of each number first
 ```
 
 Two dependencies, `react` and `react-dom`. No backend, no API keys, no CDN, no
@@ -135,6 +136,40 @@ A prototype that does not resemble any digit closely enough is **left unnamed**
 rather than guessed at, so it reaches the results screen as a picture the user
 can see is not a number and reject in one tap.
 
+### 4b. Teaching it your numbers — `core/exemplars.ts`, `core/markerColor.ts`
+
+Tap one marker per number before analysing and the built-in font is not
+consulted at all: every marker is matched against the examples instead.
+
+This is worth doing, and not only because it fixes the names. It unlocks the one
+signal the automatic path cannot use. Every marker on a card like this has a
+white face with a black digit, so shape is all a reader has to work with — but
+the bead *bodies* are pearl, black, gold and pink, which are nothing like each
+other. Colour is only safe once a person supplies the mapping: learned without
+supervision it is the most dangerous signal available, because one mislabelled
+colour is hundreds of wrong markers at once. Anchored to examples, a colour can
+only ever name a number somebody pointed at.
+
+On the reference photograph the `4`s were the weakest class. Grouped by shape
+alone they were collected correctly and still picked up seven markers that were
+plainly `1`s, `2`s and `3`s — at this print size those glyphs really do resemble
+a `4` once averaged, and splitting the groups finer did not separate them (it
+went from 7 groups to 59 with the same seven mistakes). Bead colour separates
+them outright: sampled in a tight band just outside the printed face, every
+genuine `4` sat within 12 of the marked example and the nearest impostor was 66
+away.
+
+|                       | `4` count | `4`s away from the tail | needing review |
+| --------------------- | --------- | ----------------------- | -------------- |
+| no examples marked    | 101       | 7                       | 31             |
+| one example per number| 94        | **0**                   | 12             |
+
+Where that band is sampled decides whether any of this works. Beads do not sit
+edge to edge, so a band wide enough to look safe includes the artwork between
+them and the fur underneath drags every reading toward the same muddy average —
+at 0.26-0.44 of the marker spacing the genuine `4`s and their impostors overlap
+and the signal is useless.
+
 ### 5. Confirming
 
 The results screen shows each distinct digit as its averaged picture, rendered
@@ -211,7 +246,11 @@ read and agree with.
   to photograph closer.
 - **The built-in font is a generic sans-serif.** A kit with a distinctive
   typeface may need its groups renamed; that is one tap each, and the grouping
-  itself does not depend on the font.
+  itself does not depend on the font. Marking one example per number avoids the
+  font entirely and is the better fix.
+- **Numbers whose beads share a colour.** Marking examples helps most when each
+  number has its own bead colour. Where two numbers use the same colour the
+  match falls back to shape, which is where it started.
 - **Markers that are not on a printed face.** Detection assumes a bright disc
   under the digit.
 
