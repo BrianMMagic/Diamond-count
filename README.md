@@ -26,6 +26,7 @@ npm run synth      # accuracy against sheets with known contents
 npm run samples    # run real photographs in samples/ through the pipeline
 npm run browser    # drive the built app in a real browser and screenshot it
 npm run browser:teach  # same, but marking one example of each number first
+npm run browser:filters # check the overlay filters actually narrow what is drawn
 ```
 
 Two dependencies, `react` and `react-dom`. No backend, no API keys, no CDN, no
@@ -196,6 +197,18 @@ label settles every marker in it.
 The overlay draws every detection on the photo, colour-coded by confidence, with
 zoom and pan. Individual markers can be relabelled, rejected or added; the review
 queue steps through the genuinely uncertain ones worst-first.
+
+Two filters narrow it to something a person can actually check by looking, since
+six hundred dots at once can only be judged as a whole:
+
+- **One number at a time.** A marker the app got wrong stands out against its
+  neighbours, and one it missed shows up as a hole in an otherwise even run of
+  dots. Neither is visible with every other number drawn on top.
+- **One confidence level at a time**, and *medium* especially. Medium is not a
+  vague middle: a marker lands there when the averaged picture of its group came
+  out fuzzy, so the medium set tends to be one whole class of marker rather than
+  a scattering. On the reference card 97 of the 106 medium markers were `4`s —
+  exactly the digit that was going wrong.
 
 ---
 

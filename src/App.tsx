@@ -11,6 +11,7 @@ import { AdvancedSettings } from './ui/AdvancedSettings.tsx';
 import { NumberPad } from './ui/NumberPad.tsx';
 import { NumberSetPicker } from './ui/NumberSetPicker.tsx';
 import { GroupPanel } from './ui/GroupPanel.tsx';
+import { OverlayFilters } from './ui/OverlayFilters.tsx';
 import { TeachPanel } from './ui/TeachPanel.tsx';
 
 type Sheet = 'none' | 'marker' | 'review' | 'debug' | 'add' | 'teach';
@@ -116,11 +117,6 @@ export default function App() {
                   onChange={(v) => app.setOverlay({ ...app.overlay, showNumbers: v, visible: true })}
                 />
                 <Toggle
-                  label="Low confidence only"
-                  checked={app.overlay.lowConfidenceOnly}
-                  onChange={(v) => app.setOverlay({ ...app.overlay, lowConfidenceOnly: v, visible: true })}
-                />
-                <Toggle
                   label="Possible missed"
                   checked={app.overlay.showPossibleMissed}
                   onChange={(v) => app.setOverlay({ ...app.overlay, showPossibleMissed: v, visible: true })}
@@ -192,6 +188,11 @@ export default function App() {
                 onToggleShowAll={app.setShowAllNumbers}
                 onReview={() => setSheet('review')}
                 onApplyCorrections={app.applyCorrections}
+              />
+              <OverlayFilters
+                overlay={app.overlay}
+                summary={app.counts}
+                onChange={app.setOverlay}
               />
               <GroupPanel
                 result={app.result}

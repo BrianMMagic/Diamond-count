@@ -76,7 +76,8 @@ export function ImageViewer(props: Props) {
       drawOverlay(ctx as CanvasRenderingContext2D, props.markers, props.possibleMissed, {
         showDetections: props.overlay.showDetections,
         showNumbers: props.overlay.showNumbers,
-        lowConfidenceOnly: props.overlay.lowConfidenceOnly,
+        confidence: props.overlay.confidence,
+        onlyNumbers: props.overlay.onlyNumbers,
         showPossibleMissed: props.overlay.showPossibleMissed,
         selectedId: props.selectedId,
         scale: view.scale,

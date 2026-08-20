@@ -18,7 +18,8 @@
     "cluster": "tsx scripts/cluster-test.ts",
     "synth": "tsx scripts/synth-check.ts",
     "browser": "tsx scripts/browser-check.ts",
-    "browser:teach": "tsx scripts/browser-teach.ts"
+    "browser:teach": "tsx scripts/browser-teach.ts",
+    "browser:filters": "tsx scripts/browser-filters.ts"
   },
   "dependencies": {
     "react": "^19.2.0",

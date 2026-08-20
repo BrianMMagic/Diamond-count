@@ -17,11 +17,31 @@ import { imageSignature, loadTraining, saveTraining } from './trainingStore.ts';
 
 export type Phase = 'idle' | 'loaded' | 'analyzing' | 'results';
 
+/** Which confidence levels the overlay draws. */
+export type ConfidenceFilter = 'all' | 'high' | 'medium' | 'review';
+
 export interface OverlayState {
   visible: boolean;
   showDetections: boolean;
   showNumbers: boolean;
-  lowConfidenceOnly: boolean;
+  /**
+   * Restrict the overlay to one confidence level.
+   *
+   * `medium` earns its own filter because it is not a vague middle: a marker
+   * lands there when its group's averaged picture came out fuzzy, so the
+   * medium set tends to be one whole class of marker rather than a scattering.
+   * On the reference card 97 of the 106 medium markers were `4`s — the digit
+   * that was actually going wrong.
+   */
+  confidence: ConfidenceFilter;
+  /**
+   * Show only these numbers, or all of them when null.
+   *
+   * Showing one number at a time is the quickest way to audit a count: a marker
+   * the app got wrong stands out against its neighbours, and a marker it missed
+   * shows up as a hole in an otherwise even run of dots.
+   */
+  onlyNumbers: number[] | null;
   showPossibleMissed: boolean;
 }
 
@@ -29,7 +49,8 @@ const DEFAULT_OVERLAY: OverlayState = {
   visible: true,
   showDetections: true,
   showNumbers: true,
-  lowConfidenceOnly: false,
+  confidence: 'all',
+  onlyNumbers: null,
   showPossibleMissed: false,
 };
 

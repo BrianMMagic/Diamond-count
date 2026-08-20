@@ -3,11 +3,31 @@ import type { MarkerCandidate, MarkerDetection } from '../core/types.ts';
 export interface OverlayOptions {
   showDetections: boolean;
   showNumbers: boolean;
-  lowConfidenceOnly: boolean;
+  /** Draw only markers at this confidence level. */
+  confidence: 'all' | 'high' | 'medium' | 'review';
+  /** Draw only these numbers, or all of them when null. */
+  onlyNumbers: number[] | null;
   showPossibleMissed: boolean;
   selectedId: string | null;
   /** Current image->screen scale, so strokes stay a constant size on screen. */
   scale: number;
+}
+
+/**
+ * Whether a marker passes the current filters.
+ *
+ * A marker the user has set by hand always passes. Filtering is for auditing
+ * what the app decided, and hiding the user's own corrections while they are
+ * checking a number would make the overlay disagree with the counts.
+ */
+function passes(m: MarkerDetection, opts: OverlayOptions): boolean {
+  const manual = m.manualNumber != null;
+  if (opts.confidence !== 'all' && !manual && m.finalConfidence !== opts.confidence) return false;
+  if (opts.onlyNumbers) {
+    const value = m.manualNumber ?? m.finalNumber;
+    if (value == null || !opts.onlyNumbers.includes(value)) return false;
+  }
+  return true;
 }
 
 export const MARKER_COLORS = {
@@ -60,7 +80,7 @@ export function drawOverlay(
 
   if (opts.showDetections) {
     for (const m of markers) {
-      if (opts.lowConfidenceOnly && m.finalConfidence !== 'review' && m.manualNumber == null) continue;
+      if (!passes(m, opts)) continue;
       const selected = m.id === opts.selectedId;
       ctx.strokeStyle = colorForMarker(m);
       ctx.lineWidth = (selected ? 3.5 : m.finalConfidence === 'review' ? 2.6 : 1.8) * px;
@@ -85,7 +105,7 @@ export function drawOverlay(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const m of markers) {
-      if (opts.lowConfidenceOnly && m.finalConfidence !== 'review' && m.manualNumber == null) continue;
+      if (!passes(m, opts)) continue;
       if (m.rejected) continue;
       const value = m.manualNumber ?? m.finalNumber;
       const label = value == null ? '?' : String(value);
