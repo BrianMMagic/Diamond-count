@@ -70,12 +70,30 @@ export interface GlyphDetectorOptions {
   minInkContrast?: number;
   /** Sauvola window as a fraction of pitch. Exposed for tuning sweeps. */
   windowFactor?: number;
+  /** Largest glyph height as a fraction of pitch. Exposed for tuning sweeps. */
+  maxGlyphHeight?: number;
 }
 
 /** Ink components smaller than this fraction of the pitch are paper noise. */
 const MIN_GLYPH_H = 0.12;
-/** Ink components taller than this are artwork, not a printed digit. */
-const MAX_GLYPH_H = 0.5;
+/**
+ * Ink components taller than this fraction of the spacing are artwork.
+ *
+ * The bound is on the *marker spacing*, not the marker, so how much of a card's
+ * spacing a digit occupies depends on how tightly its markers are laid out. On
+ * a card whose beads sit apart, a 31px digit against 70px spacing fills 0.44 of
+ * it. On a card whose beads touch, the same relationship gives 0.8 — the digit
+ * is no bigger relative to its own bead, there is simply no gap between beads to
+ * dilute it.
+ *
+ * At 0.5 the second kind of card lost every real marker: the digits were all
+ * rejected as too tall and what survived was fur between the beads, 82
+ * detections where there were over six hundred markers. A digit cannot be
+ * larger than the marker carrying it and markers cannot overlap, so anything up
+ * to the full spacing is physically possible; 0.8 keeps that headroom while
+ * still excluding the large artwork this test exists to reject.
+ */
+const MAX_GLYPH_H = 0.8;
 
 export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): GlyphDetection[] {
   const { pitch } = opts;
@@ -93,7 +111,7 @@ export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): Glyph
   const integral = buildIntegral(gray);
 
   const minH = pitch * MIN_GLYPH_H;
-  const maxH = pitch * MAX_GLYPH_H;
+  const maxH = pitch * (opts.maxGlyphHeight ?? MAX_GLYPH_H);
 
   const kept: GlyphDetection[] = [];
   for (const c of labelled.components) {
@@ -111,7 +129,15 @@ export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): Glyph
     if (detection) kept.push(detection);
   }
 
-  return rejectSizeOutliers(suppressNeighbours(mergeGlyphParts(kept, pitch), pitch));
+  // Size first, then suppression.
+  //
+  // The other order loses markers outright. A marker's own ring is about 0.8 of
+  // the spacing tall, so it passes the height bound and arrives as a candidate
+  // sitting exactly where the digit is; it can outscore the digit in
+  // suppression, and is then dropped by the size band — which takes the marker
+  // with it. Removing the wrong-sized candidates before anything competes means
+  // suppression only ever chooses between plausible markers.
+  return suppressNeighbours(rejectSizeOutliers(mergeGlyphParts(kept, pitch)), pitch);
 }
 
 /**

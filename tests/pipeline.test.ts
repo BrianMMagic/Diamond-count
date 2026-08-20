@@ -226,6 +226,32 @@ describe('the analysis, against sheets whose contents are known', () => {
     }, 180_000);
   });
 
+  /**
+   * The case that broke on a second real card.
+   *
+   * Every size bound is expressed against marker *spacing*, not against the
+   * marker, so how much of the spacing a digit occupies depends on how tightly
+   * the card is laid out. Beads sitting apart with a modest digit gave 0.44;
+   * beads touching with a digit filling the face gave 0.8. A cap at 0.5 fitted
+   * the first card and rejected every real digit on the second — leaving only
+   * fur between the beads, 82 detections where there were over six hundred
+   * markers, and the app confidently counting the gaps.
+   */
+  it('finds markers whose digit nearly fills the space between them', async () => {
+    const { image, markers, truth } = synthesize({
+      counts: { 4: 60, 8: 120 },
+      radius: 22,
+      spacingFactor: 1.0,
+      glyphScale: 1.7,
+      seed: 5,
+    });
+    const result = await run(image);
+    const s = score(result, markers);
+    expect(s.recall).toBeGreaterThanOrEqual(0.99);
+    expect(s.purity).toBeGreaterThanOrEqual(0.995);
+    expect(result.markers.length).toBe(Number(truth.total));
+  }, 120_000);
+
   it('never emits two markers for one physical marker', async () => {
     const { image, markers } = synthesize({
       counts: { 1: 30, 2: 45, 3: 25, 4: 20 }, radius: 17, spacingFactor: 1.08, seed: 88,

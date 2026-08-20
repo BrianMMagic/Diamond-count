@@ -106,6 +106,7 @@ export function drawMarker(
   ring: [number, number, number],
   face: [number, number, number] = [246, 245, 242],
   specular = 0,
+  glyphScale = 1.15,
 ): void {
   const rOuter = radius * 1.08;
   const rInner = radius * 0.8;
@@ -131,7 +132,7 @@ export function drawMarker(
 
   // The printed digit(s) inside the light centre.
   const glyphs = digit === 10 ? [1, 0] : [digit];
-  const glyphHeight = rInner * 1.15;
+  const glyphHeight = rInner * glyphScale;
   const size = Math.max(9, Math.round(glyphHeight));
   const masks = glyphs.map((g) => rasterizeDigit(DIGIT_SHAPES[g], size));
   const totalWidth = masks.length * size * 0.62;
@@ -226,6 +227,7 @@ export function synthesize(opts: SynthOptions): {
       ringColors[number] ?? [120, 120, 120],
       opts.faceColors?.[number] ?? [246, 245, 242],
       opts.specular ?? 0,
+      opts.glyphScale ?? 1.15,
     );
     markers.push({ x, y, radius: r, number });
   });
