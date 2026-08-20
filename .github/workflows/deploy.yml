@@ -1,7 +1,13 @@
 # Build the app and publish it to GitHub Pages.
 #
-# Requires Settings -> Pages -> Source: "GitHub Actions" to be selected once;
-# after that every push to the branch below redeploys automatically.
+# Settings -> Pages -> Source MUST be "GitHub Actions", not "Deploy from a
+# branch". With a branch selected, GitHub ALSO publishes that branch's root
+# directly, and the two deploys race: the root holds the unbuilt index.html,
+# which asks the browser for /src/main.tsx and 404s. The site served a blank
+# page for a few minutes that way. Whichever deploy lands last wins, so this is
+# not a preference — a branch source silently breaks the site at random.
+#
+# After that every push to the branch below redeploys automatically.
 name: Deploy to GitHub Pages
 
 on:
