@@ -141,6 +141,21 @@ can see is not a number and reject in one tap.
 Tap one marker per number before analysing and the built-in font is not
 consulted at all: every marker is matched against the examples instead.
 
+Several examples of the same number are allowed and are the way to fix a number
+that keeps coming out wrong — a `3` on gold and a `3` on white fur are the same
+digit under different conditions. Each marker is matched to the closest example
+of each number, and the confidence behind it is the margin between *numbers*,
+never between examples: comparing examples, a second `3` becomes the runner-up
+to a `3`, so the margin collapses on markers that are in fact certain and the
+review queue grows the more you teach it. Correcting a marker by hand also
+records it as an example, so re-running fixes every other marker that was wrong
+the same way.
+
+Examples are saved in the browser against a fingerprint of the photograph, so
+they survive a reload. They are deliberately *not* carried to a different photo:
+an example is a coordinate on one image, and reused elsewhere it points at
+whatever happens to sit at those pixels.
+
 This is worth doing, and not only because it fixes the names. It unlocks the one
 signal the automatic path cannot use. Every marker on a card like this has a
 white face with a black digit, so shape is all a reader has to work with — but

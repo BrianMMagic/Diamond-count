@@ -13,6 +13,7 @@ import type {
   ProgressUpdate,
 } from '../core/types.ts';
 import type { ExemplarPoint, WorkerResponse } from '../worker/protocol.ts';
+import { imageSignature, loadTraining, saveTraining } from './trainingStore.ts';
 
 export type Phase = 'idle' | 'loaded' | 'analyzing' | 'results';
 
@@ -57,9 +58,22 @@ export function useAppController() {
   const workerRef = useRef<Worker | null>(null);
   const imageRef = useRef<LoadedImage | null>(null);
   const exemplarsRef = useRef<ExemplarPoint[]>([]);
+  /** Content fingerprint of the loaded photo; training is saved against it. */
+  const signatureRef = useRef<string | null>(null);
+  // These let the correction handlers reach helpers defined further down without
+  // shuffling the file into dependency order.
+  const resultRef = useRef<AnalysisResult | null>(null);
+  const addExemplarRef = useRef<(x: number, y: number, digit: number) => void>(() => {});
+  const analyzeRef = useRef<() => Promise<void>>(async () => {});
 
   imageRef.current = image;
   exemplarsRef.current = exemplars;
+  resultRef.current = result;
+
+  // Persist whenever the training changes, so a reload keeps it.
+  useEffect(() => {
+    if (signatureRef.current) saveTraining(signatureRef.current, exemplars);
+  }, [exemplars]);
 
   useEffect(
     () => () => {
@@ -80,6 +94,13 @@ export function useAppController() {
         if (prev) URL.revokeObjectURL(prev.previewUrl);
         return loaded;
       });
+      // Examples are coordinates on one particular photograph, so they can never
+      // carry over to a different one — kept, they would point at whatever
+      // happens to sit at those pixels. Training for THIS photo is restored if
+      // it was saved earlier.
+      const signature = imageSignature(loaded.full);
+      signatureRef.current = signature;
+      setExemplars(loadTraining(signature));
       setPhase('loaded');
     } catch (err) {
       setError(`Could not read that image: ${(err as Error).message}`);
@@ -140,6 +161,8 @@ export function useAppController() {
     [settings],
   );
 
+  analyzeRef.current = analyze;
+
   const cancel = useCallback(() => {
     workerRef.current?.terminate();
     workerRef.current = null;
@@ -167,6 +190,14 @@ export function useAppController() {
         needsReview: false,
         reason: 'Set by you.',
       });
+      // A correction is an example, and the most valuable kind: the user is
+      // pointing at a marker the analysis got wrong and saying what it really
+      // is. Kept, re-analysing fixes every other marker that was wrong the same
+      // way, instead of asking for the same correction once per marker.
+      if (value != null) {
+        const marker = resultRef.current?.markers.find((m) => m.id === id);
+        if (marker) addExemplarRef.current(marker.x, marker.y, value);
+      }
     },
     [updateMarker],
   );
@@ -208,14 +239,28 @@ export function useAppController() {
    * again is how a mistake is undone rather than a thing to warn about.
    */
   const addExemplar = useCallback((x: number, y: number, digit: number) => {
-    setExemplars((prev) => [...prev.filter((e) => e.digit !== digit), { digit, x, y }]);
+    setExemplars((prev) => {
+      // Several examples of the same number are useful — a `3` on gold and a `3`
+      // on white fur are the same digit photographed under different conditions,
+      // and each marker is matched to the closest example of each number. A tap
+      // on a marker already marked replaces it, so a mis-tap is undone by
+      // repeating it rather than being a thing to warn about.
+      const kept = prev.filter((e) => Math.hypot(e.x - x, e.y - y) > 8);
+      return [...kept, { digit, x, y }];
+    });
   }, []);
 
-  const removeExemplar = useCallback((digit: number) => {
-    setExemplars((prev) => prev.filter((e) => e.digit !== digit));
+  const removeExemplar = useCallback((digit: number, x?: number, y?: number) => {
+    setExemplars((prev) =>
+      x == null || y == null
+        ? prev.filter((e) => e.digit !== digit)
+        : prev.filter((e) => !(e.digit === digit && Math.hypot(e.x - x, e.y - y) <= 8)),
+    );
   }, []);
 
   const clearExemplars = useCallback(() => setExemplars([]), []);
+
+  addExemplarRef.current = addExemplar;
 
   const addMarker = useCallback((x: number, y: number, value: number) => {
     setResult((prev) => {
@@ -332,7 +377,20 @@ export function useAppController() {
   }, []);
 
   /** Re-learn colours from the corrections and re-decide the uncertain markers. */
+  /**
+   * Re-decide the uncertain markers in light of what the user has fixed.
+   *
+   * Once there are examples to go on, the corrections have changed what the
+   * analysis knows, so it is re-run: a marker fixed by hand becomes an example,
+   * and every other marker that was wrong the same way follows without being
+   * touched. Without examples there is nothing new to learn from, so the cheap
+   * in-place pass is all that is available.
+   */
   const applyCorrections = useCallback(() => {
+    if (exemplarsRef.current.length > 0 && imageRef.current) {
+      void analyzeRef.current();
+      return;
+    }
     setResult((prev) => (prev ? refineWithCorrections({ ...prev, markers: prev.markers.map((m) => ({ ...m })) }) : prev));
   }, []);
 

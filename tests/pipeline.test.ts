@@ -176,6 +176,39 @@ describe('the analysis, against sheets whose contents are known', () => {
       expect([...summary.counts.keys()].sort((a, b) => a - b)).toEqual([1, 2, 4]);
     }, 180_000);
 
+    it('does not get less certain when given more examples of the same number', async () => {
+      // The margin behind a marker's confidence has to compare NUMBERS, not
+      // examples. Comparing examples, a second `4` becomes the runner-up to a
+      // `4`, the margin collapses on markers that are in fact certain, and
+      // marking more examples — the thing a user does when they want a better
+      // answer — made the review queue grow from 12 to 70 on the reference card.
+      const { image, markers, truth } = beadSheet();
+      const one = examples(markers);
+      const extra = one.flatMap(({ digit }) => {
+        const of = markers.filter((m) => m.number === digit);
+        return [of[Math.floor(of.length / 2)], of[of.length - 1]]
+          .filter(Boolean)
+          .map((m) => ({ digit, x: m.x, y: m.y }));
+      });
+
+      const run1 = await runPipeline(image, {
+        settings: { ...DEFAULT_SETTINGS, useTesseract: false },
+        exemplars: one,
+      });
+      const run3 = await runPipeline(image, {
+        settings: { ...DEFAULT_SETTINGS, useTesseract: false },
+        exemplars: [...one, ...extra],
+      });
+
+      const a = countMarkers(run1.markers);
+      const b = countMarkers(run3.markers);
+      expect(b.needsReview).toBeLessThanOrEqual(a.needsReview + 2);
+      // And the answer itself must not drift.
+      for (const n of [1, 2, 3, 4]) {
+        expect(b.counts.get(n), `count of ${n}`).toBe(Number(truth.counts[String(n)]));
+      }
+    }, 180_000);
+
     it('reports how many of a group actually carry its number', async () => {
       const { image, markers } = beadSheet();
       const result = await runPipeline(image, {

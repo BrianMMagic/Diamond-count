@@ -5,7 +5,7 @@ interface Props {
   marking: boolean;
   onStartMarking(): void;
   onStopMarking(): void;
-  onRemove(digit: number): void;
+  onRemove(digit: number, x?: number, y?: number): void;
   onClear(): void;
 }
 
@@ -32,26 +32,34 @@ interface Props {
  * number somebody pointed at.
  */
 export function TeachPanel({ exemplars, marking, onStartMarking, onStopMarking, onRemove, onClear }: Props) {
-  const sorted = [...exemplars].sort((a, b) => a.digit - b.digit);
+  // Grouped by number, because that is the question being answered: which
+  // numbers has it been shown, and how many examples of each.
+  const byDigit = new Map<number, ExemplarPoint[]>();
+  for (const e of exemplars) {
+    const bucket = byDigit.get(e.digit);
+    if (bucket) bucket.push(e);
+    else byDigit.set(e.digit, [e]);
+  }
+  const sorted = [...byDigit.entries()].sort((a, b) => a[0] - b[0]);
 
   return (
     <section className="teach">
       <h3>Teach it your numbers</h3>
       <p className="panel-lede">
         {marking
-          ? 'Tap a marker on the photo, then choose which number it is. One example of each number is enough.'
-          : 'Optional, but it is the single biggest accuracy gain — especially if one number keeps coming out wrong. Point at one example of each number and the app matches everything else against your examples instead of guessing from a built-in font.'}
+          ? 'Tap a marker on the photo, then choose which number it is. One example of each number is enough to start; add more of any number that keeps coming out wrong.'
+          : 'Optional, but it is the single biggest accuracy gain — especially if one number keeps coming out wrong. Point at an example of each number and the app matches everything else against your examples instead of guessing from a built-in font. Your examples are saved for this photo.'}
       </p>
 
       {sorted.length > 0 && (
         <ul className="teach-list">
-          {sorted.map((e) => (
-            <li key={e.digit}>
-              <span className="teach-digit">{e.digit}</span>
+          {sorted.map(([digit, points]) => (
+            <li key={digit}>
+              <span className="teach-digit">{digit}</span>
               <span className="teach-where">
-                marked at {Math.round(e.x)}, {Math.round(e.y)}
+                {points.length} example{points.length === 1 ? '' : 's'} marked
               </span>
-              <button type="button" className="btn btn-quiet" onClick={() => onRemove(e.digit)}>
+              <button type="button" className="btn btn-quiet" onClick={() => onRemove(digit)}>
                 Remove
               </button>
             </li>

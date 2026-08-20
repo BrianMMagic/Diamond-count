@@ -68,13 +68,28 @@ export function matchExemplar(
 ): ExemplarMatch {
   if (exemplars.length === 0) return { digit: null, distance: Infinity, margin: 0 };
 
-  let best: { digit: number; d: number } | null = null;
-  let second = Infinity;
+  // Collapse to the best example of each DIGIT before comparing.
+  //
+  // The margin has to say "how much better is this number than the next
+  // number", not "how much better is this example than the next example". Those
+  // are the same thing only while there is exactly one example per digit. Add a
+  // second `4` and the runner-up to a `4` becomes the other `4`, so the margin
+  // collapses to nothing on markers that are in fact certain — which is why
+  // marking more examples made the review queue grow from 12 to 70 instead of
+  // shrinking it.
+  const bestPerDigit = new Map<number, number>();
   for (const e of exemplars) {
     const d = glyphDistance(shape, e.glyph) + COLOR_WEIGHT * normalizedColorDistance(rim, e.rim);
+    const seen = bestPerDigit.get(e.digit);
+    if (seen === undefined || d < seen) bestPerDigit.set(e.digit, d);
+  }
+
+  let best: { digit: number; d: number } | null = null;
+  let second = Infinity;
+  for (const [digit, d] of bestPerDigit) {
     if (!best || d < best.d) {
       if (best) second = best.d;
-      best = { digit: e.digit, d };
+      best = { digit, d };
     } else if (d < second) {
       second = d;
     }

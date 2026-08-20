@@ -85,6 +85,40 @@ for (const e of EXAMPLES) {
 const listed = await page.locator('.teach-list li').count();
 console.log(`examples marked: ${listed} of ${EXAMPLES.length}`);
 
+// Training must survive a reload: it is the most valuable thing the user does
+// and, before it was persisted, the easiest thing to lose.
+await page.reload({ waitUntil: 'networkidle' });
+await page.locator('input[type=file]').first().waitFor({ state: 'attached', timeout: 15_000 });
+await page.setInputFiles('input[type=file]', sample);
+await page.waitForTimeout(1200);
+const afterReload = await page.locator('.teach-list li').count();
+console.log(`examples after reloading the page and re-opening the photo: ${afterReload}`);
+if (afterReload !== EXAMPLES.length) problems.push(`training did not survive a reload (${afterReload})`);
+
+// A different photograph must NOT inherit these examples. They are coordinates
+// on one image, so carried over they would point at whatever happens to sit at
+// those pixels — wrong, and silently so.
+const other = join(root, 'samples', 'other-card.png');
+async function loadPhoto(path: string) {
+  // The file input only exists on the upload screen, so go back to it first.
+  const back = page.getByRole('button', { name: /new image/i });
+  if (await back.count()) await back.first().click();
+  await page.locator('input[type=file]').first().waitFor({ state: 'attached', timeout: 15_000 });
+  await page.setInputFiles('input[type=file]', path);
+  await page.waitForTimeout(1200);
+}
+
+if (existsSync(other)) {
+  await loadPhoto(other);
+  const carried = await page.locator('.teach-list li').count();
+  console.log(`examples carried over to a different photo: ${carried} (want 0)`);
+  if (carried !== 0) problems.push(`training leaked to another image (${carried})`);
+  await loadPhoto(sample);
+  const restored = await page.locator('.teach-list li').count();
+  console.log(`examples restored on returning to the original photo: ${restored}`);
+  if (restored !== EXAMPLES.length) problems.push(`training not restored on return (${restored})`);
+}
+
 await page.getByRole('button', { name: /^analyz|^analys/i }).first().click();
 const started = Date.now();
 let finished = true;
