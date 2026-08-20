@@ -104,13 +104,11 @@ export interface DetectorSettings {
   /** Longest edge of the detection working copy, in pixels. */
   workingResolution: number;
   /**
-   * Also use the Tesseract OCR engine.
+   * Kept so stored settings and existing callers still load.
    *
-   * Off by default. It fetches its worker and language data from a CDN, so it
-   * makes an otherwise fully offline app depend on the network; and now that
-   * digits are read from one averaged picture per group rather than per marker,
-   * the built-in reader handles that input well on its own. The toggle stays
-   * for anyone who wants a second opinion.
+   * Nothing reads it. Digits are read from one averaged picture per distinct
+   * shape rather than once per marker, and a general-purpose OCR engine had
+   * nothing to add to that while making an offline app depend on a CDN.
    */
   useTesseract: boolean;
 }

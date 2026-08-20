@@ -3,7 +3,7 @@ import { loadImageFile, toTransferable, fromTransferable } from '../core/imageLo
 import type { LoadedImage } from '../core/imageLoader.ts';
 import { countMarkers } from '../core/resultCounter.ts';
 import { refineWithCorrections } from '../core/pipeline.ts';
-import { reviewPriority } from '../core/confidenceCalculator.ts';
+import { reviewPriority } from '../core/reviewQueue.ts';
 import { DEFAULT_SETTINGS } from '../core/types.ts';
 import type {
   AnalysisResult,

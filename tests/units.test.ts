@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { deduplicate } from '../src/core/markerDeduplicator.ts';
 import type { MarkerCandidate, MarkerDetection } from '../src/core/types.ts';
 import { countMarkers, countRows, formatCounts } from '../src/core/resultCounter.ts';
 import { connectedComponents } from '../src/core/cv/connected.ts';
@@ -7,7 +6,6 @@ import { otsuThreshold } from '../src/core/cv/threshold.ts';
 import { getDigitTemplates } from '../src/core/classifier/digitFont.ts';
 import { GLYPH_SIZE } from '../src/core/markerCropper.ts';
 import { scoreGlyph } from '../src/core/classifier/templateClassifier.ts';
-import { interpret } from '../src/core/classifier/tesseractClassifier.ts';
 import { evaluate } from '../src/testing/groundTruth.ts';
 
 function candidate(id: string, x: number, y: number, r = 10, score = 0.8): MarkerCandidate {
@@ -22,27 +20,6 @@ function candidate(id: string, x: number, y: number, r = 10, score = 0.8): Marke
     source: 'radial-symmetry',
   };
 }
-
-describe('deduplication', () => {
-  it('merges overlapping candidates and keeps distinct ones', () => {
-    const result = deduplicate([
-      candidate('a', 100, 100, 10, 0.9),
-      candidate('b', 103, 101, 10, 0.7),
-      candidate('c', 140, 100, 10, 0.8),
-    ]);
-    expect(result.markers).toHaveLength(2);
-    expect(result.merged).toBe(1);
-    expect(result.markers[0].id).toBe('a');
-  });
-
-  it('rewards agreement between two independent generators', () => {
-    const a = candidate('a', 50, 50, 10, 0.6);
-    const b = { ...candidate('b', 51, 50, 10, 0.55), source: 'contour' as const };
-    const result = deduplicate([a, b]);
-    expect(result.markers).toHaveLength(1);
-    expect(result.markers[0].detectionScore).toBeGreaterThan(0.6);
-  });
-});
 
 describe('digit templates', () => {
   it('rasterises ten distinct digits with the expected counters', () => {
@@ -66,17 +43,6 @@ describe('digit templates', () => {
       const scores = scoreGlyph({ mask: t.mask, x: 0, y: 0, width: GLYPH_SIZE, height: GLYPH_SIZE, fill: 0.4, holes });
       expect(scores[0].digit).toBe(t.digit);
     }
-  });
-});
-
-describe('OCR result interpretation', () => {
-  it('accepts 1-9 and 10 and rejects everything else', () => {
-    expect(interpret('3', 1)).toBe(3);
-    expect(interpret('10', 2)).toBe(10);
-    expect(interpret('0', 1)).toBeNull();
-    expect(interpret('', 1)).toBeNull();
-    expect(interpret('44', 1)).toBe(4);
-    expect(interpret('47', 2)).toBeNull();
   });
 });
 
