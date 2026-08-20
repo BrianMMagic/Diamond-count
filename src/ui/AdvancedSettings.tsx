@@ -78,17 +78,6 @@ export function AdvancedSettings({ settings, estimatedMarkerSize, onChange, onRe
           <small>Longest edge used for detection. Raise it if markers are very small.</small>
         </label>
 
-        <label className="switch">
-          <input
-            type="checkbox"
-            checked={settings.useTesseract}
-            onChange={(e) => set('useTesseract', e.target.checked)}
-          />
-          <span>
-            Also use the Tesseract OCR engine — needs a network connection the first time
-          </span>
-        </label>
-
         <div className="advanced-actions">
           <button type="button" className="btn btn-quiet" onClick={() => onChange({ ...DEFAULT_SETTINGS })}>
             Reset defaults

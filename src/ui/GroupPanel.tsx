@@ -48,7 +48,12 @@ export function GroupPanel({ result, onRelabel, onReject }: Props) {
                 <div className="group-text">
                   <strong>{group.number == null ? 'Not identified' : `Number ${group.number}`}</strong>
                   <small>
-                    {group.count} marker{group.count === 1 ? '' : 's'} ·{' '}
+                    {(group.assignedCount ?? group.count)} marker
+                    {(group.assignedCount ?? group.count) === 1 ? '' : 's'}
+                    {group.assignedCount != null && group.assignedCount < group.count
+                      ? ` · ${group.count - group.assignedCount} more matched another number by bead colour`
+                      : ''}{' '}
+                    ·{' '}
                     {group.sharpness >= 0.6
                       ? 'combined picture is clear'
                       : 'combined picture is fuzzy — worth checking'}

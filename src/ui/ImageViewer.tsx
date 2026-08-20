@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
 import type { MarkerCandidate, MarkerDetection } from '../core/types.ts';
 import type { OverlayState } from '../state/store.ts';
-import { drawOverlay, hitTest } from './overlayRenderer.ts';
+import { drawExemplars, drawOverlay, hitTest } from './overlayRenderer.ts';
 
 interface Props {
   previewUrl: string;
@@ -11,6 +11,10 @@ interface Props {
   overlay: OverlayState;
   selectedId: string | null;
   addMode: boolean;
+  /** Markers the user named as examples, drawn on top of everything else. */
+  exemplars?: Array<{ digit: number; x: number; y: number }>;
+  /** Marker radius to draw those examples at, when no analysis has run yet. */
+  exemplarRadius?: number;
   onSelect(marker: MarkerDetection | null): void;
   onAddAt(x: number, y: number): void;
   expanded: boolean;
@@ -72,13 +76,22 @@ export function ImageViewer(props: Props) {
       drawOverlay(ctx as CanvasRenderingContext2D, props.markers, props.possibleMissed, {
         showDetections: props.overlay.showDetections,
         showNumbers: props.overlay.showNumbers,
-        lowConfidenceOnly: props.overlay.lowConfidenceOnly,
+        confidence: props.overlay.confidence,
+        onlyNumbers: props.overlay.onlyNumbers,
         showPossibleMissed: props.overlay.showPossibleMissed,
         selectedId: props.selectedId,
         scale: view.scale,
       });
     }
-  }, [props.markers, props.possibleMissed, props.overlay, props.selectedId]);
+    if (props.exemplars?.length) {
+      const radius =
+        props.exemplarRadius ??
+        (props.markers.length
+          ? props.markers.reduce((s, m) => s + m.radius, 0) / props.markers.length
+          : 24);
+      drawExemplars(ctx as CanvasRenderingContext2D, props.exemplars, radius, view.scale);
+    }
+  }, [props.markers, props.possibleMissed, props.overlay, props.selectedId, props.exemplars, props.exemplarRadius]);
 
   const fit = useCallback(() => {
     const wrap = wrapRef.current;

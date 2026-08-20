@@ -3,11 +3,31 @@ import type { MarkerCandidate, MarkerDetection } from '../core/types.ts';
 export interface OverlayOptions {
   showDetections: boolean;
   showNumbers: boolean;
-  lowConfidenceOnly: boolean;
+  /** Draw only markers at this confidence level. */
+  confidence: 'all' | 'high' | 'medium' | 'review';
+  /** Draw only these numbers, or all of them when null. */
+  onlyNumbers: number[] | null;
   showPossibleMissed: boolean;
   selectedId: string | null;
   /** Current image->screen scale, so strokes stay a constant size on screen. */
   scale: number;
+}
+
+/**
+ * Whether a marker passes the current filters.
+ *
+ * A marker the user has set by hand always passes. Filtering is for auditing
+ * what the app decided, and hiding the user's own corrections while they are
+ * checking a number would make the overlay disagree with the counts.
+ */
+function passes(m: MarkerDetection, opts: OverlayOptions): boolean {
+  const manual = m.manualNumber != null;
+  if (opts.confidence !== 'all' && !manual && m.finalConfidence !== opts.confidence) return false;
+  if (opts.onlyNumbers) {
+    const value = m.manualNumber ?? m.finalNumber;
+    if (value == null || !opts.onlyNumbers.includes(value)) return false;
+  }
+  return true;
 }
 
 export const MARKER_COLORS = {
@@ -60,7 +80,7 @@ export function drawOverlay(
 
   if (opts.showDetections) {
     for (const m of markers) {
-      if (opts.lowConfidenceOnly && m.finalConfidence !== 'review' && m.manualNumber == null) continue;
+      if (!passes(m, opts)) continue;
       const selected = m.id === opts.selectedId;
       ctx.strokeStyle = colorForMarker(m);
       ctx.lineWidth = (selected ? 3.5 : m.finalConfidence === 'review' ? 2.6 : 1.8) * px;
@@ -85,7 +105,7 @@ export function drawOverlay(
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const m of markers) {
-      if (opts.lowConfidenceOnly && m.finalConfidence !== 'review' && m.manualNumber == null) continue;
+      if (!passes(m, opts)) continue;
       if (m.rejected) continue;
       const value = m.manualNumber ?? m.finalNumber;
       const label = value == null ? '?' : String(value);
@@ -101,7 +121,7 @@ export function drawOverlay(
   ctx.restore();
 }
 
-function roundRect(
+export function roundRect(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
@@ -136,4 +156,47 @@ export function hitTest(
     }
   }
   return best;
+}
+
+/**
+ * Draw the markers the user pointed at as examples.
+ *
+ * Deliberately loud and unlike everything else on the overlay. These few points
+ * decide what every other marker is called, so it has to be obvious at a glance
+ * which ones they are and what each was named — a single example put on the
+ * wrong marker is the one mistake here that silently moves hundreds of counts.
+ */
+export function drawExemplars(
+  ctx: CanvasRenderingContext2D,
+  exemplars: Array<{ digit: number; x: number; y: number }>,
+  radius: number,
+  scale: number,
+): void {
+  const px = 1 / Math.max(scale, 1e-6);
+  ctx.save();
+  ctx.lineJoin = 'round';
+  for (const e of exemplars) {
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, radius * 1.15, 0, Math.PI * 2);
+    ctx.lineWidth = 4 * px;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+    ctx.lineWidth = 2.5 * px;
+    ctx.strokeStyle = MARKER_COLORS.manual;
+    ctx.stroke();
+
+    const label = String(e.digit);
+    const size = Math.max(12, radius * 1.1);
+    ctx.font = `700 ${size}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const ly = e.y - radius * 1.9;
+    const w = ctx.measureText(label).width + size * 0.7;
+    ctx.fillStyle = MARKER_COLORS.manual;
+    roundRect(ctx, e.x - w / 2, ly - size * 0.65, w, size * 1.3, size * 0.35);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(label, e.x, ly);
+  }
+  ctx.restore();
 }

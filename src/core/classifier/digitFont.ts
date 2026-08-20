@@ -22,7 +22,16 @@ export interface DigitShape {
   holes: number;
 }
 
-/** Sample an elliptical arc. Angles in degrees, y grows downwards. */
+/**
+ * Sample an elliptical arc. Angles in degrees, y grows downwards.
+ *
+ * Because y grows downwards, 0 is the 3 o'clock position and *increasing* the
+ * angle travels clockwise on screen: 90 is 6 o'clock, 180 is 9 o'clock, 270 is
+ * 12 o'clock. Sweeping the short way round when the long way was meant draws
+ * the bowl of a digit through the bottom instead of over the top, which turns
+ * it upside down — see the note on `DIGIT_SHAPES`. Carry the end angle past 360
+ * where a sweep needs to cross 3 o'clock.
+ */
 function arc(
   cx: number,
   cy: number,
@@ -47,6 +56,19 @@ function line(x0: number, y0: number, x1: number, y1: number): Stroke {
   ];
 }
 
+/**
+ * The reference shapes every reading is measured against.
+ *
+ * `2`, `3` and `5` were each drawn with their bowls sweeping the wrong way
+ * round, so they rasterised upside down: the `2` came out as a squashed `z`,
+ * the `3` as a `⊢`, and the `5` as an `F`. Nothing detected it because the
+ * synthetic test sheets are rendered from these same shapes, so the templates
+ * agreed with the fixtures and the fixtures agreed with the templates.
+ *
+ * The cost was not subtle. A real `2` matched its own broken template so poorly
+ * that `7` beat it, which is where the reference photograph's 409 markers
+ * labelled `7` came from — on a card containing no `7` at all.
+ */
 export const DIGIT_SHAPES: DigitShape[] = [
   {
     digit: 0,
@@ -65,7 +87,9 @@ export const DIGIT_SHAPES: DigitShape[] = [
     widthRatio: 0.6,
     holes: 0,
     strokes: [
-      arc(0.3, 0.3, 0.25, 0.25, 185, 20, 26),
+      // Over the top from 9 o'clock round to just past 3, then the diagonal
+      // down to the base bar.
+      arc(0.3, 0.3, 0.25, 0.25, 180, 380, 26),
       line(0.53, 0.38, 0.05, 0.94),
       line(0.03, 0.95, 0.58, 0.95),
     ],
@@ -75,8 +99,10 @@ export const DIGIT_SHAPES: DigitShape[] = [
     widthRatio: 0.6,
     holes: 0,
     strokes: [
-      arc(0.3, 0.28, 0.24, 0.24, 190, 70, 24),
-      arc(0.3, 0.71, 0.26, 0.26, 290, 160, 26),
+      // Upper bowl: upper-left, over the top, down to 6 o'clock.
+      arc(0.3, 0.28, 0.24, 0.24, 200, 450, 24),
+      // Lower bowl: 12 o'clock, round the right, out to the lower left.
+      arc(0.3, 0.71, 0.26, 0.26, 270, 520, 26),
       line(0.26, 0.5, 0.36, 0.5),
     ],
   },
@@ -94,7 +120,8 @@ export const DIGIT_SHAPES: DigitShape[] = [
       line(0.08, 0.05, 0.55, 0.05),
       line(0.08, 0.05, 0.06, 0.44),
       line(0.06, 0.44, 0.26, 0.4),
-      arc(0.3, 0.67, 0.27, 0.28, 285, 130, 26),
+      // Bowl: just past 12 o'clock, round the right and under to the lower left.
+      arc(0.3, 0.67, 0.27, 0.28, 280, 490, 26),
     ],
   },
   {

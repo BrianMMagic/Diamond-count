@@ -11,12 +11,19 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "samples": "tsx scripts/run-samples.ts"
+    "samples": "tsx scripts/run-samples.ts",
+    "detect": "tsx scripts/detect-test.ts",
+    "crop": "tsx scripts/crop.ts",
+    "measure": "tsx scripts/measure.ts",
+    "cluster": "tsx scripts/cluster-test.ts",
+    "synth": "tsx scripts/synth-check.ts",
+    "browser": "tsx scripts/browser-check.ts",
+    "browser:teach": "tsx scripts/browser-teach.ts",
+    "browser:filters": "tsx scripts/browser-filters.ts"
   },
   "dependencies": {
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "tesseract.js": "^7.0.0"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -104,13 +104,11 @@ export interface DetectorSettings {
   /** Longest edge of the detection working copy, in pixels. */
   workingResolution: number;
   /**
-   * Also use the Tesseract OCR engine.
+   * Kept so stored settings and existing callers still load.
    *
-   * Off by default. It fetches its worker and language data from a CDN, so it
-   * makes an otherwise fully offline app depend on the network; and now that
-   * digits are read from one averaged picture per group rather than per marker,
-   * the built-in reader handles that input well on its own. The toggle stays
-   * for anyone who wants a second opinion.
+   * Nothing reads it. Digits are read from one averaged picture per distinct
+   * shape rather than once per marker, and a general-purpose OCR engine had
+   * nothing to add to that while making an offline app depend on a CDN.
    */
   useTesseract: boolean;
 }
@@ -136,6 +134,17 @@ export interface ShapeGroup {
   /** Mean distance of members to the averaged shape, in pixels. */
   spread: number;
   glyphCount: number;
+  /**
+   * How many of this group's markers actually carry the group's number.
+   *
+   * Normally the same as `count`. It can be smaller once the user has marked
+   * examples, because a marker is then named on its own bead colour as well as
+   * on the shared shape of its group — so a group of look-alike glyphs can hand
+   * some of its markers to a different number. Reporting `count` as if it were
+   * the number of `4`s on the card would then overstate them by exactly the
+   * markers colour moved elsewhere.
+   */
+  assignedCount?: number;
   /** Averaged glyph mask(s), 32x32 each, laid out side by side. */
   prototype: number[];
 }
