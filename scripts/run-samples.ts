@@ -33,6 +33,24 @@ const args = process.argv.slice(2);
 const writeOverlay = args.includes('--overlay');
 const only = args.filter((a) => !a.startsWith('--'));
 
+/**
+ * `--numbers=1,2,3,4` constrains the reader to the digits the card contains.
+ *
+ * The app has always had this as a picker on its main screen, but the harness
+ * ran without it, so harness output was not what a user would ever see: on the
+ * reference photograph an unconstrained run labelled 409 markers `7`, a digit
+ * that does not appear on the card at all. Measuring against a configuration
+ * nobody runs makes the numbers useless for judging a change.
+ */
+const numbersArg = args.find((a) => a.startsWith('--numbers='));
+const allowedNumbers = numbersArg
+  ? numbersArg
+      .slice('--numbers='.length)
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n))
+  : null;
+
 /** Decode JPEG/PNG and apply the EXIF rotation the browser would apply for us. */
 function decode(path: string): RgbaImage {
   const buffer = readFileSync(path);
@@ -162,7 +180,7 @@ async function main(): Promise<void> {
     const result = await runPipeline(image, {
       // Tesseract needs a browser; the harness exercises the built-in reader,
       // which is also the fallback the app uses when Tesseract cannot load.
-      settings: { ...DEFAULT_SETTINGS, useTesseract: false },
+      settings: { ...DEFAULT_SETTINGS, useTesseract: false, allowedNumbers },
       classifierFactory: async () => ({ classifier: new TemplateClassifier(), engine: 'template' }),
     });
     const summary = countMarkers(result.markers);

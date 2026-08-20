@@ -11,7 +11,10 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "samples": "tsx scripts/run-samples.ts"
+    "samples": "tsx scripts/run-samples.ts",
+    "detect": "tsx scripts/detect-test.ts",
+    "crop": "tsx scripts/crop.ts",
+    "measure": "tsx scripts/measure.ts"
   },
   "dependencies": {
     "react": "^19.2.0",
