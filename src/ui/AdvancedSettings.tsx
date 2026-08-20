@@ -84,7 +84,9 @@ export function AdvancedSettings({ settings, estimatedMarkerSize, onChange, onRe
             checked={settings.useTesseract}
             onChange={(e) => set('useTesseract', e.target.checked)}
           />
-          <span>Use the Tesseract OCR engine (falls back to the built-in reader)</span>
+          <span>
+            Also use the Tesseract OCR engine — needs a network connection the first time
+          </span>
         </label>
 
         <div className="advanced-actions">

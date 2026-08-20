@@ -102,12 +102,36 @@ export interface ClassifierChoice {
   warning?: string;
 }
 
+/** How long to wait for an optional engine before giving up on it. */
+const ENGINE_LOAD_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} did not load within ${ms / 1000}s`)), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /**
  * Build the classifier for a run.
  *
- * The template matcher is always present, so a blocked CDN, an offline device
- * or an unsupported browser degrades to a working (if slightly weaker) app
- * rather than to an error screen.
+ * The built-in matcher is always present, so a blocked CDN, an offline device
+ * or an unsupported browser degrades to a working app rather than to a stall.
+ *
+ * The timeout is not belt-and-braces. Tesseract fetches its worker script from
+ * a CDN and, when that fetch fails, throws inside its OWN nested worker — the
+ * promise this function awaits neither resolves nor rejects, so a try/catch
+ * never fires and the whole analysis hangs at "Reading numbers" forever. Racing
+ * the load against a clock is the only way to notice.
  */
 export async function createClassifier(
   useTesseract: boolean,
@@ -122,12 +146,13 @@ export async function createClassifier(
   const tess = new TesseractClassifier();
   tess.setAllowedNumbers(allowedNumbers);
   try {
-    await tess.init();
+    await withTimeout(tess.init(), ENGINE_LOAD_TIMEOUT_MS, 'Tesseract');
   } catch (err) {
+    void tess.dispose().catch(() => {});
     return {
       classifier: template,
       engine: template.name,
-      warning: `Tesseract could not be loaded (${(err as Error).message}); using the built-in classifier.`,
+      warning: `Tesseract could not be loaded (${(err as Error).message}); using the built-in reader.`,
     };
   }
   const ensemble = new EnsembleClassifier([tess, template], [0.62, 0.38]);

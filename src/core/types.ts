@@ -103,7 +103,15 @@ export interface DetectorSettings {
   expectedMarkerSize: number;
   /** Longest edge of the detection working copy, in pixels. */
   workingResolution: number;
-  /** Try to load Tesseract; falls back to the built-in classifier if it fails. */
+  /**
+   * Also use the Tesseract OCR engine.
+   *
+   * Off by default. It fetches its worker and language data from a CDN, so it
+   * makes an otherwise fully offline app depend on the network; and now that
+   * digits are read from one averaged picture per group rather than per marker,
+   * the built-in reader handles that input well on its own. The toggle stays
+   * for anyone who wants a second opinion.
+   */
   useTesseract: boolean;
 }
 
@@ -113,7 +121,7 @@ export const DEFAULT_SETTINGS: DetectorSettings = {
   ocrSensitivity: 0.5,
   expectedMarkerSize: 0,
   workingResolution: 2000,
-  useTesseract: true,
+  useTesseract: false,
 };
 
 /** One distinct digit shape found in the image, and the number it reads as. */
