@@ -22,7 +22,7 @@ import type { GrayImage } from './cv/image.ts';
 import { buildIntegral, localMeanStd } from './cv/integral.ts';
 import { sauvola } from './cv/threshold.ts';
 import { connectedComponents } from './cv/connected.ts';
-import type { Component } from './cv/connected.ts';
+import type { Component, LabelResult } from './cv/connected.ts';
 
 export interface GlyphDetection {
   /** Marker centre in the coordinates of the image passed in. */
@@ -39,6 +39,13 @@ export interface GlyphDetection {
   glyphMean: number;
   /** How strongly the face stands out from what surrounds the marker. */
   faceContrast: number;
+  /**
+   * Roughness of the face around the digit: its standard deviation over its
+   * mean, counting only the bright pixels so the digit itself does not inflate
+   * it. A printed face is smooth and scores low; fur, which is what survives
+   * the contrast tests when a dark strand crosses pale hair, scores high.
+   */
+  faceRoughness: number;
   /** Combined detection quality, higher is better. */
   score: number;
 }
@@ -51,7 +58,15 @@ export interface GlyphDetectorOptions {
    * the pipeline sweeps this rather than trusting one value.
    */
   k?: number;
-  /** Require the face to be at least this much brighter than the ink (0-255). */
+  /**
+   * Require the face to be at least this much brighter than the ink (0-255).
+   *
+   * Printed digits on the reference card clear 90-110. The default sits well
+   * below that rather than near it: the markers that come closest to the bar
+   * are the pearl ones on pale fur, which are the markers most worth keeping,
+   * and a threshold tuned to the edge of the real population deletes them.
+   * What it does exclude is fur shadow, which lands around 30.
+   */
   minInkContrast?: number;
 }
 
@@ -63,7 +78,7 @@ const MAX_GLYPH_H = 0.5;
 export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): GlyphDetection[] {
   const { pitch } = opts;
   const k = opts.k ?? 0.28;
-  const minInkContrast = opts.minInkContrast ?? 28;
+  const minInkContrast = opts.minInkContrast ?? 60;
 
   // The Sauvola window has to be wide enough to span the digit and some of the
   // face around it. Sized off the digit rather than the marker, a window that
@@ -90,11 +105,40 @@ export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): Glyph
     // Ink that fills almost none of its own box is a thin artwork edge.
     if (c.area < w * h * 0.12) continue;
 
-    const detection = measureFace(gray, integral, c, pitch, minInkContrast);
+    const detection = measureFace(gray, integral, labelled, c, pitch, minInkContrast);
     if (detection) kept.push(detection);
   }
 
-  return suppressNeighbours(mergeGlyphParts(kept, pitch), pitch);
+  return rejectSizeOutliers(suppressNeighbours(mergeGlyphParts(kept, pitch), pitch));
+}
+
+/**
+ * Drop detections whose digit is the wrong size for this card.
+ *
+ * Printed digits on one card are strikingly uniform — across the reference
+ * photograph every real marker's glyph stood between 29 and 34 pixels tall,
+ * a spread of under a fifth, because they came off the same press at the same
+ * scale. What survives the contrast tests and is *not* a marker generally does
+ * not: a dark strand crossing pale fur reads as genuine black ink on a genuine
+ * bright face, and passes every photometric check, but came out 18 pixels tall
+ * next to neighbours at 29.
+ *
+ * The band is taken from the image's own population rather than fixed, so it
+ * carries over to a card printed at a different size or shot from further away.
+ * It is set wide enough to keep both extremes seen on the reference card and
+ * still exclude something a third too small.
+ */
+function rejectSizeOutliers(items: GlyphDetection[]): GlyphDetection[] {
+  if (items.length < 12) return items;
+  const heights = items.map((d) => d.maxY - d.minY + 1).sort((a, b) => a - b);
+  const mid = heights[Math.floor(heights.length / 2)];
+  if (mid <= 0) return items;
+  const lo = mid * 0.72;
+  const hi = mid * 1.4;
+  return items.filter((d) => {
+    const h = d.maxY - d.minY + 1;
+    return h >= lo && h <= hi;
+  });
 }
 
 /**
@@ -109,6 +153,7 @@ export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): Glyph
 function measureFace(
   gray: GrayImage,
   integral: ReturnType<typeof buildIntegral>,
+  labelled: LabelResult,
   c: Component,
   pitch: number,
   minInkContrast: number,
@@ -122,7 +167,7 @@ function measureFace(
   const face = localMeanStd(integral, Math.round(cx), Math.round(cy), faceRadius);
   const outer = localMeanStd(integral, Math.round(cx), Math.round(cy), outerRadius);
 
-  const glyphMean = meanOfComponent(gray, c);
+  const glyphMean = meanOfComponent(gray, labelled, c);
   const inkContrast = face.mean - glyphMean;
   if (inkContrast < minInkContrast) return null;
 
@@ -131,6 +176,8 @@ function measureFace(
   // surroundings — that case is carried by the ink contrast above instead.
   const faceContrast = face.mean - outer.mean;
   if (faceContrast < -6) return null;
+
+  const faceRoughness = measureRoughness(gray, cx, cy, faceRadius, (face.mean + glyphMean) / 2);
 
   const score = inkContrast + Math.max(0, faceContrast) * 0.5;
   return {
@@ -143,18 +190,69 @@ function measureFace(
     faceMean: face.mean,
     glyphMean,
     faceContrast,
+    faceRoughness,
     score,
   };
 }
 
-function meanOfComponent(gray: GrayImage, c: Component): number {
-  // Sampling the bounding box rather than the exact label set is close enough
-  // for a contrast test and avoids a second pass over the label image.
+/**
+ * Spread of the bright part of the face, relative to its own brightness.
+ *
+ * Pixels darker than `split` are the digit and are left out — otherwise every
+ * marker looks rough in proportion to how much ink its digit happens to carry,
+ * and a `4` would score very differently from a `1`.
+ */
+function measureRoughness(
+  gray: GrayImage,
+  cx: number,
+  cy: number,
+  radius: number,
+  split: number,
+): number {
+  const x0 = Math.max(0, Math.round(cx - radius));
+  const x1 = Math.min(gray.width - 1, Math.round(cx + radius));
+  const y0 = Math.max(0, Math.round(cy - radius));
+  const y1 = Math.min(gray.height - 1, Math.round(cy + radius));
+  const r2 = radius * radius;
+  let n = 0;
+  let sum = 0;
+  let sumSq = 0;
+  for (let y = y0; y <= y1; y++) {
+    const dy = y - cy;
+    const row = y * gray.width;
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - cx;
+      if (dx * dx + dy * dy > r2) continue;
+      const v = gray.data[row + x];
+      if (v < split) continue;
+      n++;
+      sum += v;
+      sumSq += v * v;
+    }
+  }
+  if (n < 8) return 1;
+  const mean = sum / n;
+  if (mean <= 0) return 1;
+  return Math.sqrt(Math.max(0, sumSq / n - mean * mean)) / mean;
+}
+
+/**
+ * Mean brightness of the ink itself.
+ *
+ * Only pixels carrying this component's label are counted. Averaging the
+ * bounding box instead looks like a shortcut and is not: a `1` fills a small
+ * fraction of its own box and the rest is bright face, so the "ink" mean comes
+ * out close to the face mean and the contrast test it feeds measures nothing.
+ * Every marker on the reference card sat under an ink contrast of 45 that way,
+ * when true black-on-white contrast is nearer 150.
+ */
+function meanOfComponent(gray: GrayImage, labelled: LabelResult, c: Component): number {
   let total = 0;
   let n = 0;
   for (let y = c.minY; y <= c.maxY; y++) {
     const row = y * gray.width;
     for (let x = c.minX; x <= c.maxX; x++) {
+      if (labelled.labels[row + x] !== c.label) continue;
       total += gray.data[row + x];
       n++;
     }

@@ -14,7 +14,8 @@
     "samples": "tsx scripts/run-samples.ts",
     "detect": "tsx scripts/detect-test.ts",
     "crop": "tsx scripts/crop.ts",
-    "measure": "tsx scripts/measure.ts"
+    "measure": "tsx scripts/measure.ts",
+    "cluster": "tsx scripts/cluster-test.ts"
   },
   "dependencies": {
     "react": "^19.2.0",

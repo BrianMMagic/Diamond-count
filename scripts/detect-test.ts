@@ -38,15 +38,49 @@ const pitch = Number(flag('pitch') ?? 0) || estimatePitch(gray).pitch;
 const k = Number(flag('k') ?? 0.28);
 
 const t0 = performance.now();
-const found = detectGlyphs(gray, { pitch, k });
+const minInkContrast = Number(flag('ink') ?? 28);
+const found = detectGlyphs(gray, { pitch, k, minInkContrast });
 const ms = Math.round(performance.now() - t0);
 
 console.log(`${name}  ${image.width}x${image.height}  pitch ${pitch.toFixed(1)}px  k ${k}`);
 console.log(`  detections: ${found.length}  (${ms}ms)`);
-const scores = found.map((f) => f.score).sort((a, b) => a - b);
-if (scores.length) {
-  const at = (p: number) => scores[Math.floor(p * (scores.length - 1))].toFixed(0);
-  console.log(`  score p10/p50/p90: ${at(0.1)} / ${at(0.5)} / ${at(0.9)}`);
+const pct = (values: number[], p: number, dp = 0) =>
+  values.length ? values.sort((a, b) => a - b)[Math.floor(p * (values.length - 1))].toFixed(dp) : '-';
+const scores = found.map((f) => f.score);
+console.log(
+  `  score p10/p50/p90: ${pct([...scores], 0.1)} / ${pct([...scores], 0.5)} / ${pct([...scores], 0.9)}`,
+);
+const heights = found.map((f) => f.maxY - f.minY + 1);
+console.log(
+  `  glyph height p03/p10/p50/p90/p97: ${pct([...heights], 0.03)} / ${pct([...heights], 0.1)} / ` +
+    `${pct([...heights], 0.5)} / ${pct([...heights], 0.9)} / ${pct([...heights], 0.97)}  (pitch ${pitch.toFixed(0)})`,
+);
+const rough = found.map((f) => f.faceRoughness);
+console.log(
+  `  roughness p50/p90/p97/max: ${pct([...rough], 0.5, 3)} / ${pct([...rough], 0.9, 3)} / ` +
+    `${pct([...rough], 0.97, 3)} / ${pct([...rough], 1, 3)}`,
+);
+
+// `--near=x,y[,r]` dumps every measurement for detections around a point, so a
+// suspected false positive can be compared against its real neighbours rather
+// than guessed at.
+const nearArg = flag('near');
+if (nearArg) {
+  const [nx, ny, nr = 90] = nearArg.split(',').map(Number);
+  const around = found
+    .map((f) => ({ f, d: Math.hypot(f.x - nx, f.y - ny) }))
+    .filter((o) => o.d <= nr)
+    .sort((a, b) => a.d - b.d);
+  console.log(`  near ${nx},${ny} (r=${nr}): ${around.length}`);
+  for (const { f, d } of around) {
+    console.log(
+      `    d=${d.toFixed(0).padStart(3)}  at ${f.x.toFixed(0)},${f.y.toFixed(0)}  ` +
+        `h=${(f.maxY - f.minY + 1).toString().padStart(2)} w=${(f.maxX - f.minX + 1).toString().padStart(2)}  ` +
+        `ink=${(f.faceMean - f.glyphMean).toFixed(0).padStart(3)}  face=${f.faceMean.toFixed(0).padStart(3)}  ` +
+        `glyph=${f.glyphMean.toFixed(0).padStart(3)}  faceCon=${f.faceContrast.toFixed(0).padStart(4)}  ` +
+        `rough=${f.faceRoughness.toFixed(3)}`,
+    );
+  }
 }
 
 const cropArg = flag('crop');
