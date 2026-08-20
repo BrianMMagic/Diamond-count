@@ -19,7 +19,7 @@ import type { GlyphDetection } from './glyphDetector.ts';
 import { extractGlyph } from './glyphShape.ts';
 import type { GlyphMask } from './glyphShape.ts';
 import { clusterGlyphs, membershipMargin } from './glyphClusters.ts';
-import { estimatePitch } from './calibrate.ts';
+import { estimateSpacing } from './spacing.ts';
 import { readPrototype } from './prototypeReader.ts';
 import { matchExemplar, exemplarDigits } from './exemplars.ts';
 import type { Exemplar, ExemplarMatch } from './exemplars.ts';
@@ -145,7 +145,10 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   // not recoverable later. A calibrated value from the user is used as given;
   // otherwise it is measured from the image's own periodicity.
   const declaredPitch = settings.expectedMarkerSize > 0 ? settings.expectedMarkerSize / 0.92 : 0;
-  const pitch = declaredPitch > 0 ? declaredPitch : estimatePitch(gray).pitch;
+  const spacing = declaredPitch > 0
+    ? { pitch: declaredPitch, source: 'declared' as const, found: 0 }
+    : estimateSpacing(gray);
+  const pitch = spacing.pitch;
   if (!(pitch > 4)) {
     return emptyResult(original, settings, started, timings, pitch);
   }
@@ -156,6 +159,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   const detections = detectGlyphs(gray, { pitch });
   timings.detecting = now() - t;
   report('detecting', 1, `${detections.length} markers`);
+  timings.spacing = 0;
   await tick();
 
   // ---- Stage 4: isolate each digit ------------------------------------------

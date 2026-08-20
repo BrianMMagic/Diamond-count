@@ -252,6 +252,28 @@ describe('the analysis, against sheets whose contents are known', () => {
     expect(result.markers.length).toBe(Number(truth.total));
   }, 120_000);
 
+  /**
+   * Marker spacing has to survive markers that are not on a grid.
+   *
+   * Spacing is read off the image's own periodicity, which is accurate to well
+   * under a percent when the markers are laid out in rows and gives no answer at
+   * all when they are not. A real card whose beads follow the contours of the
+   * picture in curved lines has no lattice to find, so the estimate returned
+   * nothing, the pipeline had no size to work with, and it reported zero markers
+   * on a card covered in them. Scattering the markers here reproduces that:
+   * periodicity lands on 16.7 against a true 46.8, which is not a slightly worse
+   * answer but a useless one.
+   */
+  it('works out the spacing when the markers are not on a grid', async () => {
+    const { image, markers } = synthesize({
+      counts: { 3: 90, 7: 60 }, radius: 18, spacingFactor: 1.3, jitter: 0.6, seed: 12,
+    });
+    const result = await run(image);
+    const s = score(result, markers);
+    expect(s.recall).toBeGreaterThanOrEqual(0.95);
+    expect(s.purity).toBeGreaterThanOrEqual(0.99);
+  }, 120_000);
+
   it('never emits two markers for one physical marker', async () => {
     const { image, markers } = synthesize({
       counts: { 1: 30, 2: 45, 3: 25, 4: 20 }, radius: 17, spacingFactor: 1.08, seed: 88,
