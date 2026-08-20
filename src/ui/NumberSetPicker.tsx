@@ -55,7 +55,7 @@ export function NumberSetPicker({ value, onChange, inferred }: Props) {
         {auto
           ? inferred && inferred.length > 0
             ? `Working it out from the image — last run found ${inferred.join(', ')}. Tap the numbers to pin them.`
-            : 'Tap the numbers your image uses. Leaving this on Auto works, but telling it is more accurate.'
+            : 'Optional. Tap the numbers your image uses to rule the others out; Auto is usually just as accurate.'
           : `Only ${[...selected].sort((a, b) => a - b).join(', ')} will be counted.`}
       </small>
     </div>

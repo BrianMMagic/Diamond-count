@@ -7,9 +7,11 @@ for every number on it. Everything runs in the browser — **images are processe
 on your device and are not uploaded.**
 
 ```
-Upload image → wait a few seconds → see counts → inspect the overlay → correct
-any uncertain markers → done.
+Upload image → wait a few seconds → check the digits it found → done.
 ```
+
+The reference photograph is a bead card of 640 markers. It analyses in about
+1.5 seconds and asks the user to confirm seven pictures.
 
 ---
 
@@ -19,395 +21,214 @@ any uncertain markers → done.
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # typecheck + production bundle into dist/
-npm test           # unit + end-to-end pipeline tests
+npm test           # unit + end-to-end tests
+npm run synth      # accuracy against sheets with known contents
 npm run samples    # run real photographs in samples/ through the pipeline
+npm run browser    # drive the built app in a real browser and screenshot it
 ```
 
-No backend, no API keys, no paid services. The production bundle is a static
-site (`base: './'`, so it can be served from any sub-path).
+Two dependencies, `react` and `react-dom`. No backend, no API keys, no CDN, no
+network access at any point. The production bundle is a static site
+(`base: './'`, so it can be served from any sub-path).
 
 ---
 
 ## How it works
 
-This is **not** OCR over the whole image. It is a purpose-built computer-vision
-pipeline for ringed numeric markers, with every stage in its own module so it
-can be tested, inspected and replaced independently.
+An image holds a **handful of distinct markers, not several hundred independent
+puzzles**. Everything below follows from taking that seriously.
+
+A marker's digit is around 30 pixels tall in a good photograph and half that in
+an ordinary one. Reading each marker on its own means running a reader hundreds
+of times on input near the edge of what can be read at all, and a reader that is
+95% right then scatters thirty-five mistakes across seven hundred markers, none
+of them visible to the person holding the phone.
+
+So no marker is ever read on its own. Markers are grouped by the *shape* of
+their digit, each group is averaged, and only the averages are read — a handful
+of readings per image, on pictures far sharper than any single marker, which the
+user then confirms. A mistake lands once per distinct digit instead of once per
+marker, it is visible as a picture that does not match its label, and correcting
+it settles every marker in that group.
 
 ```
-image preparation
-   → marker detection
-   → duplicate removal
-   → crop extraction
-   → number recognition
-   → colour analysis
-   → colour clustering
-   → evidence resolution
-   → consistency check
-   → counting
+find the digits → isolate each one → group by shape → average → read → confirm
 ```
 
-### 1. Image preparation — `core/imageLoader.ts`, `core/imagePreprocessor.ts`
+### 1. Finding markers — `core/glyphDetector.ts`
 
-EXIF orientation is applied at decode time (`imageOrientation: 'from-image'`),
-so a portrait phone photo is not analysed sideways. Very large photos are capped
-at 24 MP — a 48 MP shot is 190 MB of RGBA and will crash a mobile browser once
-working copies exist. The original is never modified: crops for recognition and
-colour sampling come from it at full resolution, while detection runs on a
-normalised working copy (2000 px longest edge by default).
+Detection looks for the **printed digit**, not the marker's ring.
 
-Preparation flattens uneven lighting by subtracting a heavily blurred copy —
-this removes shadows, warm lamps and vignetting while leaving the rings, which
-are a high-frequency feature — then stretches contrast and lightly sharpens.
+The ring is the one feature that is not invariant. On a real bead card a `3` has
+a gold rim, a `2` a black one, and a `1` is pearl throughout — its rim within a
+few grey levels of its own face, with no edge to find at all. A detector built
+on ring gradients loses those markers outright and nothing downstream can
+recover a marker that was never proposed.
 
-### 2. Marker detection — `core/markerDetector.ts`
+What every marker has, whatever its body is made of, is a black digit on a
+bright face, and that contrast exists by construction: a person has to be able
+to read it. So the detector Sauvola-thresholds for ink, then asks of each piece
+whether it sits on a bright disc — is it dark against its immediate
+surroundings, and is that bright patch distinct from the artwork further out.
 
-Two independent candidate generators feed one verifier.
+Two details carry more weight than they look like they should:
 
-**Fast Radial Symmetry Transform** (`cv/symmetry.ts`), "bright centre" variant:
-each edge pixel votes for a point `n` pixels along its gradient, towards the
-brighter side. Our markers have a light centre inside a darker ring, so the
-ring's inner edge points straight at the centre and the whole ring votes for the
-same spot. The textbook two-signed form would let the ring's outer edge cancel
-those votes out.
+- **The face is measured without the digit standing on it.** A window centred on
+  a glyph contains that glyph, so a plain mean is dragged down in proportion to
+  how much ink the digit carries. That turns a test meant to reject
+  not-a-marker into a partial measurement of *which digit is present*: a `1` is
+  a solid bar in the middle of the window, and it failed. Sampling only the
+  bright pixels fixes it in both directions — real markers that were being
+  deleted come back, and fur that was passing now fails.
+- **Glyph size is taken from the image's own population.** Digits on one card
+  vary by under a fifth in height, because they came off one press. A dark
+  strand crossing pale fur can pass every photometric test and still be 18
+  pixels tall next to neighbours at 29. Nothing is assumed about absolute size,
+  so a card shot from further away carries over unchanged.
 
-Each pixel's magnitude contribution is **capped**. Without a cap, a black ring on
-white paper outvotes a cream ring on cream paper by an order of magnitude and no
-single threshold accepts both — this one change took recall on pale rings in the
-synthetic test from 27% to 80%.
+Marker spacing is measured from the image's own periodicity
+(`core/calibrate.ts`), accurate to well under 1% on sheets of known spacing, and
+the search range scales with the image rather than being fixed — a constant cap
+does not degrade when the true spacing exceeds it, it collapses.
 
-**Contour detection**: Sauvola-thresholded dark components that enclose a hole of
-roughly the right size. Completely independent of the gradient statistics, so
-the two generators fail in different ways.
+### 2. Isolating the digit — `core/glyphShape.ts`
 
-**Marker size is measured, not guessed.** The scale sweep scores each radius by
-its peak response weighted by how many of those peaks survive verification — a
-glossy bead's specular highlight is a small bright radially-symmetric blob and
-answers ferociously at tiny radii, which once collapsed a 17px marker to 3px and
-produced two thousand detections. The estimate is then only accurate to within a
-fifth or so, and the detector is sharply sensitive to it, so detection iterates:
-detect, measure what was found, re-run at that size, until the radius settles.
+Each detection is thresholded on its own face — across a whole tile a black
+marker body dominates the histogram and Otsu splits body from face rather than
+ink from face, swallowing the digit — and then the digit is separated from
+everything else dark in the patch. Ink touching the patch border came from
+outside the face; of what remains, the digit is the substantial piece nearest
+the middle.
 
-**The verifier** (`measureProfile`) walks 36 spokes outwards from each candidate
-and scores what it finds: a light centre, a dark region inside it (the printed
-digit), a closed ring at a consistent radius, and a surround that differs from
-the ring. It also re-centres the candidate and measures the real radius, ring
-closure, circularity and ellipse aspect — markers are allowed to be oval, since
-perspective and camera angle make them so.
+Normalisation preserves aspect ratio: a `1` stretched to fill a square box
+becomes a thick bar indistinguishable from a `7`, and the narrowness of a `1` is
+most of what identifies it. Resampling **gathers** per output cell rather than
+scattering source pixels into the output; enlarging an 11-pixel digit into a
+28-pixel box the other way leaves most cells empty and the stroke arrives full
+of holes.
 
-Marker size is **estimated from the image**: the symmetry transform is swept over
-a range of radii on a small copy and the winning scale (normalised for
-circumference) is used, then detection is re-run once at the radius actually
-measured.
+### 3. Grouping and averaging — `core/glyphClusters.ts`
 
-### 2b. "A marker has a number in it"
+Glyphs are clustered by shape, and each cluster averaged. Noise on one marker is
+independent of noise on the next while the digit is not, so the mean of two
+hundred instances is sharp where every individual one is mush.
 
-The first real card produced **1,902 detections with 1,375 of them unknown** —
-roughly a thousand shapes in the photograph that are not markers at all, each
-arriving as a "?" for the user to resolve. The strongest available signal was
-going unused: a real marker has a digit printed inside it.
+Distances are measured on a blurred copy of each glyph. Comparing crisp masks
+measures stroke weight and sub-pixel placement as much as shape — the same digit
+printed a shade heavier scores as far apart as a different digit does.
 
-So that is now a *detection* criterion, not just a classification outcome.
-Detections with no isolatable digit are set aside — not counted, and reported as
-"had no number inside" rather than queued as outstanding work. They stay visible
-and restorable in one tap.
+The join threshold is deliberately **tight**, because the two ways of being
+wrong are not symmetric:
 
-That also makes detection strictness **calibrated instead of assumed**. Each
-candidate setting is scored by how many of its detections actually carry a digit
-(sampled, not exhaustive), and the pipeline climbs towards whichever finds the
-most real markers. Because the digit requirement cleans up the surplus, it is
-free to detect loosely — the real risk is a pale ring missed for good, not a
-phantom counted.
+|                    | cost                                                         |
+| ------------------ | ------------------------------------------------------------ |
+| one digit split across groups | one extra tap per spare group; cannot change a count |
+| two digits merged into one group | unfixable — every marker takes whatever name the group is given, and nothing on screen says so |
 
-On a synthetic sheet of 210 markers salted with 220 ringed shapes that have no
-digit: every phantom rejected, `2`, `3` and `4` counted exactly, and **one**
-marker left needing review.
+### 4. Reading — `core/prototypeReader.ts`, `core/classifier/`
 
-### 3. Duplicate removal — `core/markerDeduplicator.ts`
+Each averaged prototype is matched against a small built-in vector font by
+symmetric chamfer distance, with counter count ("does it have a hole?") as a
+hard structural prior. This runs a handful of times per image.
 
-Greedy non-maximum suppression over a uniform spatial grid, using both centre
-distance and bounding-box IoU. The strongest candidate absorbs the others and
-moves to their score-weighted mean. Agreement between the two generators raises
-the detection score. **One physical marker gets exactly one detection id.**
+A prototype that does not resemble any digit closely enough is **left unnamed**
+rather than guessed at, so it reaches the results screen as a picture the user
+can see is not a number and reject in one tap.
 
-### 4. Crop extraction — `core/markerCropper.ts`
+### 5. Confirming
 
-Each marker is cut from the *original* at 2.6× its radius and resampled to a
-160 px tile, then several variants are produced (raw, contrast-enhanced, binary,
-adaptive). Otsu is applied to the centre disc only — thresholding the whole tile
-would let a black ring dominate the histogram and swallow the digit.
+The results screen shows each distinct digit as its averaged picture, rendered
+as grey so its sharpness is visible. This is the screen worth checking: any
+single marker is too small to judge by eye, the average of a few hundred is
+unmistakable, and because the counts are built from these groups, correcting one
+label settles every marker in it.
 
-The digit is then **isolated**: components touching the disc rim are ring bleed,
-components that are too small are paper noise, and what survives is sorted left
-to right. A two-glyph result is the "10" case, handled by classifying `1` and `0`
-separately.
-
-### 5. Group by digit shape, then read the average — `core/glyphClusterer.ts`
-
-On a card photographed at 2000px, a marker is 35-45px across and the printed
-digit inside it is **10-15 pixels tall**. Tesseract wants ~30px+ character
-height; below about 20px accuracy collapses. Upscaling 3-4x invents nothing — a
-blurry 13px digit becomes a blurry 47px digit.
-
-So reading every digit is the wrong shape of problem. An image contains a
-*handful of distinct markers*, not several hundred independent puzzles. Markers
-are matched **against each other** rather than against a typeface: glyphs are
-clustered by shape, and each cluster's members are **averaged**.
-
-That averaging is what makes the whole thing work. The noise on one marker is
-independent of the noise on the next while the digit is not, so the mean of two
-hundred instances is sharp where every individual one is mush. The classifier
-then reads **one clean picture per distinct digit** — typically four to six
-reads for an image holding several hundred markers — instead of hundreds of
-blurry ones. A 95%-accurate reader stops scattering 35 errors across 700
-markers.
-
-The join threshold is measured, not guessed: across a sheet of known digits, two
-instances of the same digit never exceeded 0.51 pixels apart while two different
-digits never came closer than 0.85, so the boundary sits in that gap. Prototypes
-are then compared far more strictly than raw glyphs and near-identical piles are
-merged, which repairs over-splitting on a noisy photograph.
-
-The results screen shows each distinct digit as its averaged picture. Correcting
-one label settles every marker in that group.
-
-### 6. Number recognition — `core/classifier/`
-
-Recognition sits behind one interface:
-
-```ts
-interface NumberClassifier {
-  classify(crops: MarkerCrop[]): Promise<ClassificationOutput[]>;
-}
-```
-
-Nothing outside that folder knows which engine produced a reading, so a
-TensorFlow.js or ONNX digit model can be dropped in later without touching the
-pipeline. Two engines ship today:
-
-- **`TemplateClassifier`** — pure TypeScript, no network, no wasm. Digits 0–9 are
-  described as vector strokes (`digitFont.ts`), rasterised the same way real
-  glyphs are normalised, and matched by symmetric chamfer distance. Counter count
-  ("does it have a hole?") is a hard structural prior. This is also the engine the
-  Node test harness uses, so algorithm changes are reproducible outside a browser.
-- **`TesseractClassifier`** — tesseract.js, loaded lazily, restricted to digits and
-  to a single character (or a single word for "10"). It never sees the raw photo;
-  by the time a crop reaches it the digit has been isolated onto white and
-  enlarged, which is the difference between Tesseract being useful on 6-pixel
-  print and useless on it.
-
-They run as an **ensemble**. Agreement between a stroke matcher and a trained OCR
-engine is much stronger evidence than either engine's own confidence, and their
-disagreement reliably flags a marker for a human. If Tesseract cannot load
-(offline, blocked CDN, unsupported browser) the app degrades to the built-in
-reader rather than to an error screen, and says so in the debug panel.
-
-### 7. Colour is not used
-
-Marker colour was tried as a second opinion and has been **removed entirely** —
-not disabled behind a flag, removed. Its failure mode is catastrophic rather than
-gradual: one mislabelled colour group is hundreds of wrong markers at once, which
-is the wrong trade when the job is counting. Taking it out changed the counts on
-the reference card by nothing at all (915 of 965, before and after), so it was
-costing time and risk while contributing no accuracy.
-
-Nothing in the pipeline reads colour now. The image is converted to grayscale
-during preparation and every later stage works from that; markers are identified
-by the shape of the digit printed on them, and a marker whose digit cannot be
-read is reported as unknown rather than guessed from what colour it is.
-
-### 8. Global consistency — `core/globalConsistency.ts`
-
-A kit uses a handful of numbers, not all ten. Deciding every marker against all
-ten digits independently reliably manufactures a scattering of numbers that are
-not in the image at all — the first real photograph tested produced 5 through 10
-on a card that only contains 1 to 4.
-
-Two things fix that:
-
-- **Tell it the number set.** The picker on the main screen is a hard
-  constraint. With 1–4 selected, Tesseract's character whitelist becomes `1234`
-  and the template matcher only ranks those digits, so an impossible reading
-  cannot be produced in the first place.
-- **Infer the set when not told.** A number is real if many confident readings
-  agree on it *or* it owns a substantial colour group. Anything clearing neither
-  bar is noise, and every marker that named it is **re-read** with the engine
-  narrowed to the numbers that do exist — a genuine second reading, not just a
-  fallback to whatever ranked second.
-
-Large, pure colour groups then **correct** disagreeing markers rather than just
-flagging them. Flagging is right for a handful of markers and useless for seven
-hundred; when a group of 200 identically-coloured markers is 95% "2" and a
-marker sits squarely inside it with a weak digit, the group wins outright. A
-confident, well-formed reading still survives and is flagged instead.
-
-### 9. Combining the evidence — `core/classificationResolver.ts`
-
-| Situation | Result |
-| --- | --- |
-| Strong reading, colour agrees | that number, **high** |
-| Moderate reading, colour agrees | that number, **high** |
-| Weak reading, colour strongly matches a learned number | the colour's number, method `color` |
-| No reading at all, colour strongly matches | the colour's number, method `color` |
-| **Strong reading, colour disagrees** | keep the reading, **flag for review** — colour never silently overrules a confident digit |
-| Neither convincing | **needs review**, no guess |
-
-A final consistency sweep demotes any marker whose ring colour sits squarely
-inside a large, pure cluster labelled something else.
-
-### 10. Confidence — `core/confidenceCalculator.ts`
-
-One 0–1 score from OCR confidence, variant agreement, colour confidence,
-number/colour agreement or conflict, detection quality, cluster purity and size
-consistency — bucketed into **high / medium / needs review**. The weights are
-deliberately conservative: with 700 markers it is far cheaper to review a handful
-of flagged ones than to ship a wrong total.
-
----
-
-## Verifying and correcting
-
-- **Overlay** — every detection drawn on the photo, colour-coded by how it was
-  classified (high / medium / colour-assisted / needs review / edited by you).
-  Toggle detections, numbers, low-confidence-only, possible-missed, or hide it.
-  The overlay shares the canvas and transform with the photo, so circles stay
-  glued to markers at every zoom level.
-- **Tap any marker** to see exactly why it was classified that way — the crop, the
-  reading and its confidence, the sampled ring colour, the colour prediction, the
-  method, and a plain-English reason — then change it. Totals update instantly.
-- **Review uncertain markers** steps through only what is genuinely in doubt, with
-  an enlarged crop and ten big buttons. This is where the last few percent of
-  accuracy comes from.
-- **Possible missed markers** — near-misses are kept rather than discarded, so a
-  marker the detector nearly found is one tap away from being counted.
-- **Add marker** — tap a spot, pick a number, for the rare complete miss.
-- **Re-apply my corrections** re-learns the colour model from your edits and
-  re-decides the uncertain markers. No pixels are touched, and a few manual fixes
-  often settle several other markers.
-
-The results screen never hides its own uncertainty: unresolved markers are
-reported next to the total, and only when nothing is outstanding does it say
-*All N markers classified.*
+The overlay draws every detection on the photo, colour-coded by confidence, with
+zoom and pan. Individual markers can be relabelled, rejected or added; the review
+queue steps through the genuinely uncertain ones worst-first.
 
 ---
 
 ## Export
 
-- **Copy counts** — `1: 163, 2: 284, 3: 177, 4: 118`
-- **CSV** — `marker_id, number, x, y, radius, confidence, confidence_score,
-  ocr_result, ocr_confidence, color_prediction, color_confidence, color_distance,
-  ring_rgb, classification_method, review_status`
-- **JSON** — the same per marker, plus every OCR attempt, the sampled ring colour
-  in RGB and Lab, image-level statistics, and the learned colour model
-- **Save as ground truth** — writes a verified run straight into the fixture format
-  below
+- **Copy counts** — `1: 112, 2: 282, 3: 145, 4: 101`
+- **CSV / JSON** — per marker: id, number, position, radius, confidence, which
+  group it came from, and how it was decided
+- **Save as ground truth** — writes a verified run into the fixture format below
 
 ---
 
-## Measuring accuracy on real photographs
+## Measuring accuracy
 
-Drop real images into `samples/` and run:
+Three harnesses, deliberately independent.
 
-```bash
-npm run samples                  # every image
-npm run samples -- IMG_1234.jpg  # one image
-npm run samples -- --overlay     # also write samples/output/*-overlay.png
-```
+**`npm run synth`** — sheets rendered with known contents: blur, sensor noise,
+lighting gradients, position and size jitter, tight spacing, marker radii from
+12 to 64 pixels, and a case modelled on a real kit's pearl, black, metallic and
+pink beads with specular highlights. It reports three numbers separately,
+because they fail independently:
 
-The harness decodes JPEG/PNG (applying EXIF orientation itself), runs the same
-pipeline the browser runs, and prints counts, detector statistics and timings.
-Add `samples/ground-truth/<name>.json` with hand-verified counts and it also
-reports per-number differences and lower bounds on missed, extra and
-misclassified markers:
+- **recall** — every marker found. Nothing downstream recovers a miss.
+- **purity** — each group holds one true digit. This is the property the design
+  rests on.
+- **naming** — the automatic reading was right. A convenience; the user confirms.
 
-```
-IMG_1234.jpg
-  total: expected 758, detected 757 (-1, 99.9% accurate)
-     1: expected  142 detected  141 (-1, 99.3%)
-     2: expected  317 detected  317 (+0, 100.0%)
-  missed >= 1, extra >= 0, misclassified >= 0, needs review 11
-```
+Current state: recall and purity are 100% on every case except 12-pixel markers,
+where recall falls to 84%. The real-bead sheet counts 965 of 965 with every
+digit exact.
 
-Counts alone cannot distinguish "missed a 3" from "read a 3 as a 4", so the
-report separates what it can prove rather than overstating.
+**`npm run samples`** — real photographs in `samples/`, with per-group output so
+that a count which looks right but was built from groups that look wrong is
+visible. Add `samples/ground-truth/<name>.json` to get per-number differences.
 
-Sample photographs are git-ignored; the ground-truth JSON is tracked.
+**`npm run browser`** — builds, serves and drives the app in Chromium, uploading
+a real photograph and reading the counts off the page. The Node harnesses prove
+the algorithm and nothing about the app; the worker boundary, image decoding and
+results screen only exist in a browser.
+
+### On circular ground truth
+
+The synthetic sheets are rendered from the same digit shapes the reader matches
+against. That made the suite blind in a specific way: `2`, `3` and `5` were
+drawn with their bowls sweeping the wrong way round and rasterised upside down —
+a `2` came out as a squashed `z` — and every test passed, because the fixtures
+agreed with the templates and the templates agreed with the fixtures. The only
+input with an outside opinion was a real photograph, where a real `2` matched
+its own broken template so poorly that `7` beat it and 409 markers were labelled
+with a digit the card did not contain.
+
+`tests/digitFont.test.ts` breaks that circle with an 8×8 ASCII fingerprint of
+each digit — an external description, legible in a diff, that a person has to
+read and agree with.
 
 ---
-
-## Debug mode
-
-Append `?debug=1` to the URL, or use the link on the results panel. It shows
-aggregate statistics (candidates proposed and rejected, duplicates merged,
-estimated marker size, engine used, stage timings, an OCR-confidence histogram,
-the discovered colour clusters and the learned number → colour map) and a marker
-inspector filtered to *needs review*, *OCR/colour disagreements*,
-*colour-classified* or *unreadable*. Each card shows the original crop, the
-enhanced crop, the binarised crop, the isolated glyph masks, every OCR attempt
-with its raw text, the sampled ring colour and ΔE, and the reason for the final
-decision.
-
----
-
-## Testing
-
-`npm test` covers the synthetic-sheet generator (`tests/synth.ts` renders marker
-sheets with known counts, optional blur, sensor noise, lighting gradients,
-coloured artwork underneath, position and size jitter, and tight spacing), the
-detector's recall and localisation, marker-size estimation, deduplication,
-colour maths and learning, the digit templates, OCR result interpretation,
-counting, and end-to-end pipeline runs that assert no marker is ever emitted
-twice and that the number → colour mapping is genuinely learned rather than
-assumed.
-
-## Performance
-
-All pixel work happens in a Web Worker (`worker/analysis.worker.ts`), so the UI
-never freezes. The image buffer is *transferred* in and handed back out, so two
-full-resolution copies never exist at once. Progress is reported per stage.
-Crops are re-cut on demand for the review UI rather than shipped back from the
-worker — several hundred tiles would be tens of megabytes for the sake of the few
-that are ever looked at.
 
 ## Known limits
 
-- Metallic and pearl beads are the hard case, because their ring is nearly the
-  same tone as their own face. Several thresholds were originally scaled off the
-  *digit's* contrast, which is always high, and that quietly rejected every such
-  bead — a real card reported **zero 3s** while being covered in gold ones. Those
-  thresholds now scale off the natural variation of the marker's own face.
-- Recall is weakest on **pale rings against pale paper with no shadow** — the
-  synthetic worst case sits around 80%. Real photographs of physical beads have
-  edge shadows and do better, but this is the first thing to check against your
-  own samples.
-- **Set the number picker.** Auto-inference works, but the digits on these cards
-  are only a few pixels tall and declaring the set removes a whole class of
-  error outright.
-- Tesseract loads its wasm core and language data from a CDN on first use. With
-  no network the app falls back to the built-in classifier automatically.
-- The built-in classifier's templates are a generic sans-serif. If your kit uses a
-  distinctive typeface, corrections made in the review UI are the fastest fix, and
-  `MarkerCrop.glyphs` already stores normalised 32×32 masks in a form suitable for
-  training a dedicated tiny-digit model later.
+- **Small digits.** Below roughly 20 pixels of ink the automatic naming becomes
+  unreliable and below about 15 recall starts to fall. Grouping stays pure, so
+  the counts are still one confirmation away from correct, but this is the case
+  to photograph closer.
+- **The built-in font is a generic sans-serif.** A kit with a distinctive
+  typeface may need its groups renamed; that is one tap each, and the grouping
+  itself does not depend on the font.
+- **Markers that are not on a printed face.** Detection assumes a bright disc
+  under the digit.
 
 ## Layout
 
 ```
-src/core/cv/          image primitives: colour spaces, integral images, filters,
-                      thresholding, resampling, connected components, radial symmetry
-src/core/             imageLoader · imagePreprocessor · markerDetector ·
-                      markerDeduplicator · markerCropper · colorAnalyzer ·
-                      colorClusterer · classificationResolver ·
-                      globalConsistency · confidenceCalculator · resultCounter ·
-                      missedMarkerFinder · pipeline
-src/core/classifier/  the NumberClassifier seam: digitFont · templateClassifier ·
-                      tesseractClassifier · ensemble
-src/core/glyphClusterer.ts    shape clustering and averaged-prototype reading
+src/core/cv/          image primitives: grayscale, integral images, filters,
+                      thresholding, resampling, connected components
+src/core/             calibrate · glyphDetector · glyphShape · glyphClusters ·
+                      prototypeReader · pipeline · markerCropper · imageLoader ·
+                      resultCounter · reviewQueue
+src/core/classifier/  the reader seam: digitFont · templateClassifier
 src/worker/           analysis worker + its message protocol
-src/state/            app controller (load, analyse, correct, re-refine)
+src/state/            app controller (load, analyse, correct, re-apply)
 src/ui/               viewer + overlay renderer, results, review, editor, debug
 src/export/           CSV / JSON / clipboard / ground-truth
 src/testing/          ground-truth types and evaluation
 tests/                synthetic sheet generator and the test suite
-scripts/              run-samples harness
+scripts/              sample, synthetic, crop, detect, cluster and browser harnesses
 ```

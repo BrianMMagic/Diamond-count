@@ -16,7 +16,8 @@
     "crop": "tsx scripts/crop.ts",
     "measure": "tsx scripts/measure.ts",
     "cluster": "tsx scripts/cluster-test.ts",
-    "synth": "tsx scripts/synth-check.ts"
+    "synth": "tsx scripts/synth-check.ts",
+    "browser": "tsx scripts/browser-check.ts"
   },
   "dependencies": {
     "react": "^19.2.0",
