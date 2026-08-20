@@ -8,7 +8,7 @@
  * read the counts off the page — because that is the only thing that proves the
  * published files work.
  */
-import { readFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
