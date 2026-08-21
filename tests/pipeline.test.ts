@@ -274,6 +274,52 @@ describe('the analysis, against sheets whose contents are known', () => {
     expect(s.purity).toBeGreaterThanOrEqual(0.99);
   }, 120_000);
 
+  /**
+   * The case that broke on a third real card.
+   *
+   * Kits mix two kinds of marker: a dark digit printed on a light face, and a
+   * light digit on a dark one. Every test in the detector asks whether some ink
+   * is dark against a bright face, so the second kind fails all of them — not
+   * marginally, but by construction. The card reported 420 markers, every one of
+   * them a `3`, with its 400-odd `7`s invisible; and because they were never
+   * detected, marking examples of a `7` could not rescue them.
+   */
+  it('finds markers printed light-on-dark once an example points at one', async () => {
+    const { image, markers } = synthesize({
+      counts: { 3: 120, 7: 100 },
+      radius: 20,
+      seed: 31,
+      // 3s on a cream bead, 7s on a black one — the digit colour follows.
+      faceColors: { 3: [240, 236, 224], 7: [26, 26, 28] },
+      ringColors: { 3: [206, 178, 120], 7: [18, 18, 20] },
+    });
+
+    // Without an example, only the ordinary polarity is looked for, and half the
+    // sheet is invisible. That is the deliberate behaviour: inverting an
+    // ordinary card produces impostors that displace real markers, so it is not
+    // done on spec.
+    const blind = await run(image);
+    expect(blind.markers.length).toBeLessThan(markers.length * 0.7);
+
+    // Marking one of each is proof the card carries both, and needs no
+    // threshold to interpret.
+    const example = (digit: number) => {
+      const m = markers.find((p) => p.number === digit)!;
+      return { digit, x: m.x, y: m.y };
+    };
+    const result = await runPipeline(image, {
+      settings: { ...DEFAULT_SETTINGS, useTesseract: false },
+      exemplars: [example(3), example(7)],
+    });
+    const s = score(result, markers);
+    expect(s.recall).toBeGreaterThanOrEqual(0.95);
+    expect(s.purity).toBeGreaterThanOrEqual(0.99);
+
+    const summary = countMarkers(result.markers);
+    expect([...summary.counts.keys()].sort((a, b) => a - b)).toEqual([3, 7]);
+    expect(summary.counts.get(7)!).toBeGreaterThan(90);
+  }, 120_000);
+
   it('never emits two markers for one physical marker', async () => {
     const { image, markers } = synthesize({
       counts: { 1: 30, 2: 45, 3: 25, 4: 20 }, radius: 17, spacingFactor: 1.08, seed: 88,

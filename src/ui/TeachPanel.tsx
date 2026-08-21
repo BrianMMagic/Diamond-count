@@ -50,6 +50,11 @@ export function TeachPanel({ exemplars, marking, onStartMarking, onStopMarking, 
           ? 'Tap a marker on the photo, then choose which number it is. One example of each number is enough to start; add more of any number that keeps coming out wrong.'
           : 'Optional, but it is the single biggest accuracy gain — especially if one number keeps coming out wrong. Point at an example of each number and the app matches everything else against your examples instead of guessing from a built-in font. Your examples are saved for this photo.'}
       </p>
+      <p className="panel-lede">
+        If your card has numbers printed <strong>light on a dark bead</strong> as well as dark on a
+        light one, mark one of those too. They are found by a second pass that only runs once you
+        have pointed at one, because on a card without them that pass invents markers.
+      </p>
 
       {sorted.length > 0 && (
         <ul className="teach-list">

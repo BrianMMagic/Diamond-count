@@ -81,6 +81,10 @@ function settle(gray: GrayImage, seed: number): { pitch: number; found: number }
   let pitch = seed;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (!(pitch > 3) || pitch > Math.min(gray.width, gray.height) / 3) break;
+    // Spacing is geometry, so one polarity is enough to establish it and using
+    // both makes it unstable: the second pass's impostors shift the nearest-
+    // neighbour distance the loop is trying to settle on, and it stops
+    // converging at all.
     const found = detectGlyphs(gray, { pitch });
     if (found.length < 8) break;
     const measured = nearestNeighbourSpacing(found);

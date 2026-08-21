@@ -14,7 +14,7 @@
  */
 import type { RgbaImage } from './cv/image.ts';
 import { toGray } from './cv/color.ts';
-import { detectGlyphs } from './glyphDetector.ts';
+import { detectGlyphs, detectMarkers, invertGray } from './glyphDetector.ts';
 import type { GlyphDetection } from './glyphDetector.ts';
 import { extractGlyph } from './glyphShape.ts';
 import type { GlyphMask } from './glyphShape.ts';
@@ -107,8 +107,25 @@ const MIN_PROTOTYPE_SIMILARITY = 0.72;
  * Anything past this is set aside rather than counted, because "we do not know
  * which number this is" and "this is not a number" deserve different answers.
  * Queuing them asks the user to name fur, and counting them inflates the total.
+ *
+ * It is a floor, not the whole rule. How far a real marker sits from an example
+ * depends on the card: sharp digits on one photograph put 99% of real markers
+ * inside 0.56, while smaller, blurrier digits on another put the MEDIAN at 1.09,
+ * and a fixed cut applied there discarded a third of the card. So the working
+ * threshold is whichever is more forgiving — this floor, or an outlier fence
+ * drawn from the card's own spread.
  */
 const MAX_EXEMPLAR_DISTANCE = 1.4;
+
+/** Distance past which a marker is unlike this card's markers generally. */
+function rejectionDistance(distances: number[]): number {
+  if (distances.length < 20) return MAX_EXEMPLAR_DISTANCE;
+  const sorted = [...distances].sort((a, b) => a - b);
+  const at = (p: number) => sorted[Math.floor(p * (sorted.length - 1))];
+  const q1 = at(0.25);
+  const q3 = at(0.75);
+  return Math.max(MAX_EXEMPLAR_DISTANCE, q3 + 3 * (q3 - q1));
+}
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -156,10 +173,23 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   // ---- Stage 3: detection ---------------------------------------------------
   report('detecting', 0);
   t = now();
-  const detections = detectGlyphs(gray, { pitch });
+  // Look for the ordinary kind of marker first: a dark digit on a light face.
+  //
+  // The other kind — a light digit on a dark face — is found by inverting the
+  // image, but that is not done speculatively. Inverting an ordinary card turns
+  // every marker's own face into something that reads as a glyph, so the
+  // inverted pass always returns plenty, and merging those impostors displaces
+  // real markers. What makes it safe to look is the user marking an example on
+  // a marker this pass cannot see: that is proof the card has a second polarity,
+  // and it needs no threshold to interpret.
+  let detections = detectGlyphs(gray, { pitch });
+  if (opts.exemplars?.some((e) => !nearestDetection(detections, e.x, e.y, pitch))) {
+    detections = detectMarkers(gray, { pitch });
+  }
+  // Markers found on the inverted copy must be read from it too.
+  const grayInverted = detections.some((d) => d.inverted) ? invertGray(gray) : gray;
   timings.detecting = now() - t;
   report('detecting', 1, `${detections.length} markers`);
-  timings.spacing = 0;
   await tick();
 
   // ---- Stage 4: isolate each digit ------------------------------------------
@@ -169,7 +199,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   const withGlyph: GlyphDetection[] = [];
   const withoutGlyph: GlyphDetection[] = [];
   detections.forEach((d, i) => {
-    const g = extractGlyph(gray, d, pitch);
+    const g = extractGlyph(d.inverted ? grayInverted : gray, d, pitch);
     if (g) {
       glyphs.push(g);
       withGlyph.push(d);
@@ -187,7 +217,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   for (const e of opts.exemplars ?? []) {
     const near = nearestDetection(detections, e.x, e.y, pitch);
     if (!near) continue;
-    const glyph = extractGlyph(gray, near, pitch);
+    const glyph = extractGlyph(near.inverted ? grayInverted : gray, near, pitch);
     if (!glyph) continue;
     exemplars.push({
       digit: e.digit,
@@ -246,6 +276,19 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
   // ---- Stage 7: build the markers -------------------------------------------
   report('counting', 0);
   const radius = pitch * 0.46;
+  // How far from an example is too far has to be judged against this card, so
+  // every marker is measured before any is rejected.
+  const rejectAbove = exemplars.length > 0
+    ? rejectionDistance(
+        clusters.flatMap((c) =>
+          c.members.map(
+            (i) =>
+              matchExemplar(c.prototype, sampleRim(original, withGlyph[i].x, withGlyph[i].y, pitch), exemplars)
+                .distance,
+          ),
+        ),
+      )
+    : MAX_EXEMPLAR_DISTANCE;
   const markers: MarkerDetection[] = [];
   /** Detections that turned out not to resemble any number the user marked. */
   const notMarkers: MarkerCandidate[] = [];
@@ -263,7 +306,7 @@ export async function runPipeline(original: RgbaImage, opts: PipelineOptions): P
       const match = exemplars.length > 0
         ? matchExemplar(cluster.prototype, sampleRim(original, d.x, d.y, pitch), exemplars)
         : null;
-      if (match && match.distance > MAX_EXEMPLAR_DISTANCE) {
+      if (match && match.distance > rejectAbove) {
         notMarkers.push(baseCandidate(d, radius, `x${notMarkers.length}`));
         continue;
       }

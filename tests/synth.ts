@@ -122,7 +122,11 @@ export function drawMarker(
   const rOuter = radius * 1.08;
   const rInner = radius * 0.8;
   const centre = face;
-  const ink: [number, number, number] = [24, 24, 26];
+  // Light ink on a dark face where the face is dark. Real kits mix the two: a
+  // black digit on a cream bead beside a white digit on a black one, and a
+  // detector that only knows the first cannot see the second at all.
+  const faceLuma = 0.299 * centre[0] + 0.587 * centre[1] + 0.114 * centre[2];
+  const ink: [number, number, number] = faceLuma < 110 ? [242, 242, 240] : [24, 24, 26];
 
   const x0 = Math.max(0, Math.floor(cx - rOuter - 2));
   const x1 = Math.min(img.width - 1, Math.ceil(cx + rOuter + 2));

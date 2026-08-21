@@ -19,6 +19,7 @@
  * glyph already isolated, which is exactly what the classifier wants next.
  */
 import type { GrayImage } from './cv/image.ts';
+import { createGray } from './cv/image.ts';
 import { buildIntegral, localMeanStd } from './cv/integral.ts';
 import { sauvola } from './cv/threshold.ts';
 import { connectedComponents } from './cv/connected.ts';
@@ -48,6 +49,15 @@ export interface GlyphDetection {
   faceRoughness: number;
   /** Combined detection quality, higher is better. */
   score: number;
+  /**
+   * True when this marker was found on an inverted copy of the image.
+   *
+   * Kits mix two kinds of marker: a dark digit printed on a light face, and a
+   * light digit printed on a dark one. Everything here looks for the first, so
+   * the second is found by looking at the image upside down in brightness, and
+   * whoever reads the glyph afterwards has to be told which copy it came from.
+   */
+  inverted: boolean;
 }
 
 export interface GlyphDetectorOptions {
@@ -72,6 +82,8 @@ export interface GlyphDetectorOptions {
   windowFactor?: number;
   /** Largest glyph height as a fraction of pitch. Exposed for tuning sweeps. */
   maxGlyphHeight?: number;
+  /** Skip the self-calibrating size band. Used when a caller applies its own. */
+  keepAllSizes?: boolean;
 }
 
 /** Ink components smaller than this fraction of the pitch are paper noise. */
@@ -94,6 +106,95 @@ const MIN_GLYPH_H = 0.12;
  * still excluding the large artwork this test exists to reject.
  */
 const MAX_GLYPH_H = 0.8;
+
+/** A brightness-inverted copy: light ink on a dark face becomes dark on light. */
+export function invertGray(src: GrayImage): GrayImage {
+  const out = createGray(src.width, src.height);
+  for (let i = 0; i < src.data.length; i++) out.data[i] = 255 - src.data[i];
+  return out;
+}
+
+/**
+ * Find markers of both polarities.
+ *
+ * A single card commonly carries both: on one real card the `3`s are a black
+ * digit on a cream bead and the `7`s a white digit on a black bead. Every test
+ * in this file asks whether some ink is dark against a bright face, so the
+ * second kind fails all of them — not marginally, but by construction, and no
+ * amount of marking examples can rescue a marker that was never detected. That
+ * card reported 420 markers, every one of them a `3`, with 433 `7`s invisible.
+ *
+ * Inverting the image turns the second kind into the first, so the same tests
+ * apply unchanged. Suppression is run again over the union because a marker can
+ * be proposed by both passes, and the stronger reading should win.
+ */
+/**
+ * Find markers of both polarities.
+ *
+ * Kits mix two kinds: a dark digit on a light face, and a light digit on a dark
+ * one. Everything else in this file asks whether some ink is dark against a
+ * bright face, so the second kind fails every test by construction — a real card
+ * reported 420 markers, all of them `3`s, with its 400-odd `7`s invisible, and
+ * because they were never detected no amount of marking examples could rescue
+ * them. Inverting the image turns the second kind into the first.
+ *
+ * This is not run unless the caller has a reason to believe the card has a
+ * second polarity, and the reason is deliberately not a guess. Inverting an
+ * ordinary card turns every marker's own face into something that reads as a
+ * glyph, so the inverted pass always returns plenty — hundreds of confident
+ * readings of the wrong feature, which displace real markers when merged. Every
+ * automatic test tried for telling the two apart worked on some cards and failed
+ * on others: size agreement, face roughness, how much of the pass landed where
+ * the first found nothing. The one signal that does not need a threshold is a
+ * user marking an example on a marker the first pass cannot see.
+ */
+export function detectMarkers(gray: GrayImage, opts: GlyphDetectorOptions): GlyphDetection[] {
+  const onLight = detectGlyphs(gray, opts);
+  if (onLight.length < 8) return onLight;
+
+  // Size the second pass against the first, rather than against itself. On a
+  // sheet with both polarities the impostors outnumbered the real markers, so
+  // the pass's self-calibrating band took its median from them and discarded
+  // every real marker as the wrong size. Judged against the digit height the
+  // first pass established, the impostors go instead: they are the size of a
+  // marker face, and a digit is not.
+  const band = heightBand(onLight);
+  const onDark = detectGlyphs(invertGray(gray), { ...opts, keepAllSizes: true })
+    .filter((d) => {
+      const h = d.maxY - d.minY + 1;
+      return h >= band.lo && h <= band.hi;
+    })
+    .map((d) => ({ ...d, inverted: true }));
+  if (onDark.length === 0) return onLight;
+
+  // Keep only the inverted markers that are somewhere new.
+  //
+  // An inverted detection on top of a marker the first pass already found is
+  // that same bead read a second time, and read worse: it describes the face
+  // rather than the digit, so its glyph is meaningless and it drags whatever it
+  // is compared against. On one card those impostors turned a 434/396 split
+  // into 245/582. A genuine light-on-dark marker is a different bead, so it sits
+  // where the first pass found nothing and this costs it nothing at all.
+  const elsewhere = onDark.filter((d) => !hasNeighbour(onLight, d, opts.pitch * 0.55));
+  if (elsewhere.length === 0) return onLight;
+  return suppressNeighbours([...onLight, ...elsewhere], opts.pitch);
+}
+
+/** Whether `existing` holds anything within `limit` of `probe`. */
+function hasNeighbour(existing: GlyphDetection[], probe: GlyphDetection, limit: number): boolean {
+  for (const d of existing) {
+    if (Math.abs(d.x - probe.x) > limit || Math.abs(d.y - probe.y) > limit) continue;
+    if (Math.hypot(d.x - probe.x, d.y - probe.y) < limit) return true;
+  }
+  return false;
+}
+
+/** The height range the first pass established for this card's digits. */
+function heightBand(items: GlyphDetection[]): { lo: number; hi: number } {
+  const heights = items.map((d) => d.maxY - d.minY + 1).sort((a, b) => a - b);
+  const mid = heights[heights.length >> 1] || 1;
+  return { lo: mid * 0.72, hi: mid * 1.4 };
+}
 
 export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): GlyphDetection[] {
   const { pitch } = opts;
@@ -137,7 +238,8 @@ export function detectGlyphs(gray: GrayImage, opts: GlyphDetectorOptions): Glyph
   // suppression, and is then dropped by the size band — which takes the marker
   // with it. Removing the wrong-sized candidates before anything competes means
   // suppression only ever chooses between plausible markers.
-  return suppressNeighbours(rejectSizeOutliers(mergeGlyphParts(kept, pitch)), pitch);
+  const merged = mergeGlyphParts(kept, pitch);
+  return suppressNeighbours(opts.keepAllSizes ? merged : rejectSizeOutliers(merged), pitch);
 }
 
 /**
@@ -231,6 +333,7 @@ function measureFace(
     faceContrast,
     faceRoughness: face.roughness,
     score,
+    inverted: false,
   };
 }
 
@@ -366,7 +469,16 @@ function combine(group: GlyphDetection[]): GlyphDetection {
  */
 function suppressNeighbours(items: GlyphDetection[], pitch: number): GlyphDetection[] {
   const limit = pitch * 0.55;
-  const sorted = [...items].sort((a, b) => b.score - a.score);
+  // Where both polarities claim the same spot, prefer the ordinary reading.
+  //
+  // Inverting the image turns an ordinary marker's own face into something that
+  // reads as a glyph, sitting exactly where that marker's digit is. Left to
+  // score alone it can win, and the marker is then described by its face instead
+  // of its digit — on one card that cut the count of a digit from 434 to 159.
+  // A genuine second-polarity marker is somewhere else entirely, so it never
+  // competes with anything and the preference costs it nothing.
+  const rank = (d: GlyphDetection) => d.score * (d.inverted ? 1 : 1.25);
+  const sorted = [...items].sort((a, b) => rank(b) - rank(a));
   const cell = Math.max(4, limit);
   const grid = new Map<string, GlyphDetection[]>();
   const out: GlyphDetection[] = [];
